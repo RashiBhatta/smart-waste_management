@@ -1,0 +1,55 @@
+# # Dependencies
+# node_modules/
+# /.pnp
+# .pnp.js
+
+# # Testing
+# /coverage
+
+# # Production
+# /build
+# /dist
+
+# # Environment
+# .env.local
+# .env.development.local
+# .env.test.local
+# .env.production.local
+
+# # Logs
+# logs
+# *.log
+# npm-debug.log*
+# yarn-debug.log*
+# yarn-error.log*
+
+# # Editor
+# .DS_Store
+# .vscode/
+# .idea/
+# *.swp
+# *.swo
+# *~
+
+# # Uploads
+# uploads/*
+# !uploads/.gitkeep
+
+# # Database
+# *.db
+# *.sqlite
+
+# # OS
+# Thumbs.db
+node_modules/
+.env
+npm-debug.log
+yarn-debug.log*
+yarn-error.log*
+uploads/
+.DS_Store
+.vscode/
+.idea/
+*.log
+*.pid
+*.seed
