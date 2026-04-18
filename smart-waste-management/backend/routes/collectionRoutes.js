@@ -238,7 +238,7 @@
 //       if (actualWeight) {
 //         collection.actualWeight = Number(actualWeight);
 //         // Award points if completed (1kg = 10 coins)
-//         if (status === 'Completed') {
+//         if (status === 'Collected') {
 //           const points = Math.floor(Number(actualWeight) * 10);
 //           await User.findByIdAndUpdate(collection.resident, { $inc: { coins: points } });
 //         }
@@ -370,7 +370,7 @@ const updateStatus = async (req, res) => {
     if (actualWeight) {
       collection.actualWeight = Number(actualWeight);
       // Award points if completed (1kg = 10 coins)
-      if (status === 'Completed') {
+      if (status === 'Collected') {
         const points = Math.floor(Number(actualWeight) * 10);
         await User.findByIdAndUpdate(collection.resident, { $inc: { coins: points, totalCoinsEarned: points } });
       }

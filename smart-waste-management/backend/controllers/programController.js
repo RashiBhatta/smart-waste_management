@@ -82,39 +82,71 @@ exports.joinProgram = async (req, res) => {
   }
 };
 
-// @desc    Approve volunteer & Award Coins
+// @desc    Approve volunteer
 exports.approveVolunteer = async (req, res) => {
   try {
     const { programId, userId } = req.params;
     const program = await Program.findById(programId);
     
     const volunteer = program.volunteers.find(v => v.user.toString() === userId);
-    if (!volunteer || volunteer.status === 'approved') {
-      return res.status(400).json({ success: false, message: 'Invalid request or already approved' });
+    if (!volunteer || volunteer.status !== 'pending') {
+      return res.status(400).json({ success: false, message: 'Invalid request or already processed' });
     }
 
     volunteer.status = 'approved';
     volunteer.approvedAt = new Date();
-    program.currentVolunteers += 1;
     await program.save();
 
-    // Award Reward Coins (100 coins for volunteering)
+    // Notify Resident
+    await Notification.create({
+      recipient: userId,
+      type: 'program',
+      title: 'Volunteer Application Approved!',
+      message: `Your application to participate in ${program.title} has been approved. Complete the program to earn 100 coins!`,
+      data: { programId: program._id }
+    });
+
+    res.json({ success: true, message: 'Volunteer approved.' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Approval failed' });
+  }
+}
+
+// @desc    Complete volunteer program & Award Coins
+exports.completeVolunteer = async (req, res) => {
+  try {
+    const { programId, userId } = req.params;
+    const program = await Program.findById(programId);
+    
+    const volunteer = program.volunteers.find(v => v.user.toString() === userId);
+    if (!volunteer || volunteer.status !== 'approved') {
+      return res.status(400).json({ success: false, message: 'Invalid request or not an approved volunteer' });
+    }
+
+    volunteer.status = 'completed';
+    volunteer.completedAt = new Date();
+    await program.save();
+
+    // Award Reward Coins (100 coins for completing volunteer program)
     const resident = await User.findById(userId);
-    resident.coins = (resident.coins || 0) + 100;
-    await resident.save();
+    const rewardCoins = program.rewardCoins || 100;
+    
+    // Use the addCoins method to properly track totalCoinsEarned and trigger free service milestone
+    await resident.addCoins(rewardCoins, 'Volunteer Program Completion');
 
     // Notify Resident
     await Notification.create({
       recipient: userId,
       type: 'reward',
-      title: 'Volunteer Approved! 🏆',
-      message: `You earned 100 coins for joining ${program.title}!`,
-      data: { programId: program._id, coinsEarned: 100 }
+      title: 'Program Completed! 🏆',
+      message: `You earned ${rewardCoins} coins for successfully completing ${program.title}!`,
+      data: { programId: program._id, coinsEarned: rewardCoins }
     });
 
-    res.json({ success: true, message: 'Volunteer approved and rewarded.' });
+    res.json({ success: true, message: 'Volunteer marked as completed and rewarded.' });
   } catch (error) {
-    res.status(500).json({ success: false, message: 'Approval failed' });
+    console.error('Completion error:', error);
+    res.status(500).json({ success: false, message: 'Completion failed' });
   }
 }
 

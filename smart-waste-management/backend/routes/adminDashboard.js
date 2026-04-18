@@ -167,7 +167,7 @@ router.get('/dashboard', protect, authorize('admin'), async (req, res) => {
           skipped:     cs.skipped,
           pending:     cs.pending,
           totalWeight: Math.round(cs.totalWeight * 10) / 10,
-          completionRate: cs.total > 0 ? Math.round((cs.collected / cs.total) * 100) : 0,
+          completionRate: cs.total > 0 ? Math.round(((cs.collected + cs.skipped) / cs.total) * 100) : 0,
         },
         today: {
           collected: td.collected,

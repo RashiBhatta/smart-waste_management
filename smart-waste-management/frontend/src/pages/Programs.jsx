@@ -40,7 +40,7 @@ const PROGRAM_STATUS_COLOR = {
 };
 
 // ── Program card ─────────────────────────────────────────────
-const ProgramCard = ({ program, onJoin, joining }) => {
+const ProgramCard = ({ program, onJoin, joining, onParticipate }) => {
   const [detailOpen, setDetailOpen] = useState(false);
   const fillPct = Math.min((program.currentVolunteers / program.maxVolunteers) * 100, 100);
   const appStatus = program.volunteerStatus;
@@ -73,7 +73,30 @@ const ProgramCard = ({ program, onJoin, joining }) => {
         </Button>
       );
     }
-    // Already joined — show status chip
+    if (program.hasJoined) {
+      if (program.participationStatus === 'pending') {
+        return <Chip fullWidth label="Proof Pending Review" color="warning" sx={{ width: '100%', fontWeight: 800, py: 2.5, borderRadius: 2 }} />;
+      }
+      if (program.participationStatus === 'approved') {
+        return <Chip fullWidth label="Program Completed ✓" color="success" sx={{ width: '100%', fontWeight: 800, py: 2.5, borderRadius: 2 }} />;
+      }
+      if (program.participationStatus === 'rejected') {
+        return (
+          <Button fullWidth variant="outlined" color="error" onClick={() => onParticipate(program._id)} sx={{ borderRadius: 2, fontWeight: 800 }}>
+            Proof Rejected - Resubmit
+          </Button>
+        );
+      }
+      if (appStatus === 'approved') {
+        return (
+          <Button fullWidth variant="contained" color="primary" onClick={() => onParticipate(program._id)} sx={{ borderRadius: 2, fontWeight: 800 }}>
+            Submit Proof
+          </Button>
+        );
+      }
+    }
+
+    // Default status chip for pending/rejected program app
     return (
       <Chip
         fullWidth
@@ -273,6 +296,11 @@ const VolunteerPrograms = () => {
   const [loading,     setLoading]     = useState(true);
   const [joining,     setJoining]     = useState(null); // programId currently being joined
 
+  const [participateOpen, setParticipateOpen] = useState(false);
+  const [participateId, setParticipateId] = useState(null);
+  const [proofText, setProofText] = useState('');
+  const [submittingProof, setSubmittingProof] = useState(false);
+
   // Tab 0 = All programs, Tab 1 = My applications
   const myApplications = programs.filter((p) => p.hasJoined);
   const pendingCount   = myApplications.filter((p) => p.volunteerStatus === 'pending').length;
@@ -335,6 +363,28 @@ const VolunteerPrograms = () => {
       toast.error(err.response?.data?.message || 'Failed to join program');
     } finally {
       setJoining(null);
+    }
+  };
+
+  // ── Participation handler ────────────────────────────────────
+  const handleParticipateOpen = (programId) => {
+    setParticipateId(programId);
+    setProofText('');
+    setParticipateOpen(true);
+  };
+
+  const submitParticipation = async () => {
+    if (!proofText.trim()) return toast.error('Proof description is required');
+    try {
+      setSubmittingProof(true);
+      await api.post(`/programs/${participateId}/participate`, { proof: proofText });
+      toast.success('Participation proof submitted for review!');
+      setParticipateOpen(false);
+      setPrograms((prev) => prev.map(p => p._id === participateId ? { ...p, participationStatus: 'pending' } : p));
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to submit proof');
+    } finally {
+      setSubmittingProof(false);
     }
   };
 
@@ -504,6 +554,7 @@ const VolunteerPrograms = () => {
                     program={program}
                     onJoin={handleJoin}
                     joining={joining}
+                    onParticipate={handleParticipateOpen}
                   />
                 </Grid>
               ))}
@@ -512,6 +563,32 @@ const VolunteerPrograms = () => {
 
         </Container>
       </Box>
+
+      {/* ── Submit Proof Dialog ── */}
+      <Dialog open={participateOpen} onClose={() => setParticipateOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ fontWeight: 900 }}>Submit Participation Proof</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" color="text.secondary" mb={2}>
+            Please describe how you participated in this volunteer program to claim your 100 Eco-Coins.
+          </Typography>
+          <TextField
+            autoFocus
+            fullWidth
+            multiline
+            rows={4}
+            variant="outlined"
+            placeholder="I collected 2 bags of waste at the zone..."
+            value={proofText}
+            onChange={(e) => setProofText(e.target.value)}
+          />
+        </DialogContent>
+        <DialogActions sx={{ p: 2, pt: 0 }}>
+          <Button onClick={() => setParticipateOpen(false)} color="inherit">Cancel</Button>
+          <Button onClick={submitParticipation} variant="contained" disabled={submittingProof || !proofText.trim()}>
+            {submittingProof ? 'Submitting...' : 'Submit Proof'}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 };

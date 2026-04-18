@@ -8,8 +8,8 @@ const express = require('express');
 const router = express.Router();
 const Program      = require('../models/Program');
 const User         = require('../models/User');
-const Notification = require('../models/Notification');
 const VolunteerRequest = require('../models/VolunteerRequest');
+const Participation = require('../models/Participation');
 const { protect, authorize } = require('../middleware/auth');
 
 // ============================================================
@@ -25,6 +25,7 @@ router.get('/', protect, async (req, res) => {
       .select('-__v');
 
     const currentUserId = req.user._id.toString();
+    const participations = await Participation.find({ resident: req.user._id });
 
     // Attach resident-specific flags to each program
     const enriched = programs.map((prog) => {
@@ -33,11 +34,14 @@ router.get('/', protect, async (req, res) => {
       const myRecord = prog.volunteers.find(
         (v) => v.user && v.user.toString() === currentUserId
       );
+      
+      const myParticipation = participations.find(p => p.program.toString() === prog._id.toString());
 
       return {
         ...obj,
         hasJoined:       !!myRecord,
-        volunteerStatus: myRecord ? myRecord.status : null,   // 'pending' | 'approved' | 'rejected'
+        volunteerStatus: myRecord ? myRecord.status : null,   // 'pending' | 'approved' | 'rejected' | 'completed'
+        participationStatus: myParticipation ? myParticipation.status : null,
         spotsLeft:       prog.maxVolunteers - prog.currentVolunteers,
         isFull:          prog.currentVolunteers >= prog.maxVolunteers,
         // Strip full volunteer list — residents don't need other applicants' info
@@ -70,6 +74,7 @@ router.get('/:id', protect, async (req, res) => {
     const myRecord = program.volunteers.find(
       (v) => v.user && v.user.toString() === currentUserId
     );
+    const myParticipation = await Participation.findOne({ resident: req.user._id, program: program._id });
 
     const obj = program.toObject();
 
@@ -79,6 +84,7 @@ router.get('/:id', protect, async (req, res) => {
         ...obj,
         hasJoined:       !!myRecord,
         volunteerStatus: myRecord ? myRecord.status : null,
+        participationStatus: myParticipation ? myParticipation.status : null,
         appliedAt:       myRecord ? myRecord.appliedAt : null,
         approvedAt:      myRecord ? myRecord.approvedAt : null,
         spotsLeft:       program.maxVolunteers - program.currentVolunteers,
@@ -207,10 +213,13 @@ router.get('/my/applications', protect, authorize('resident'), async (req, res) 
       .sort('-createdAt')
       .select('title organization zone status volunteers rewardCoins startDate endDate description');
 
+    const participations = await Participation.find({ resident: req.user._id });
+
     const result = programs.map((prog) => {
       const myRecord = prog.volunteers.find(
         (v) => v.user.toString() === req.user._id.toString()
       );
+      const myParticipation = participations.find(p => p.program.toString() === prog._id.toString());
       return {
         _id:               prog._id,
         title:             prog.title,
@@ -221,7 +230,8 @@ router.get('/my/applications', protect, authorize('resident'), async (req, res) 
         endDate:           prog.endDate,
         description:       prog.description,
         rewardCoins:       prog.rewardCoins || 100,
-        applicationStatus: myRecord?.status,       // 'pending' | 'approved' | 'rejected'
+        applicationStatus: myRecord?.status,       // 'pending' | 'approved' | 'rejected' | 'completed'
+        participationStatus: myParticipation?.status,
         appliedAt:         myRecord?.appliedAt,
         approvedAt:        myRecord?.approvedAt,
       };
@@ -229,6 +239,66 @@ router.get('/my/applications', protect, authorize('resident'), async (req, res) 
 
     res.json({ success: true, applications: result });
   } catch (err) {
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// ============================================================
+// @desc    SUBMIT participation proof for a program
+// @route   POST /api/programs/:id/participate
+// @access  Private/Resident
+// ============================================================
+router.post('/:id/participate', protect, authorize('resident'), async (req, res) => {
+  try {
+    const { proof } = req.body;
+    if (!proof?.trim()) {
+      return res.status(400).json({ success: false, message: 'Proof description is required' });
+    }
+
+    const program = await Program.findById(req.params.id);
+    if (!program) return res.status(404).json({ success: false, message: 'Program not found' });
+
+    // Validate that the user is an approved volunteer
+    const volunteerRec = program.volunteers.find(v => v.user.toString() === req.user._id.toString());
+    if (!volunteerRec || volunteerRec.status !== 'approved') {
+      return res.status(403).json({ success: false, message: 'You must be an approved volunteer to submit proof.' });
+    }
+
+    // Check if a pending or approved participation already exists
+    const existing = await Participation.findOne({ resident: req.user._id, program: program._id });
+    if (existing) {
+      if (existing.status === 'approved') return res.status(400).json({ success: false, message: 'Already marked as completed' });
+      if (existing.status === 'pending') return res.status(400).json({ success: false, message: 'Submission already pending review' });
+    }
+
+    // Save participation
+    if (existing && existing.status === 'rejected') {
+      // Allow resubmission
+      existing.status = 'pending';
+      existing.proof = proof;
+      existing.submittedAt = new Date();
+      await existing.save();
+    } else {
+      await Participation.create({
+        resident: req.user._id,
+        program: program._id,
+        proof,
+      });
+    }
+
+    // Notify admins
+    const io = req.app.get('io');
+    if (io) {
+      io.to('admins').emit('newParticipationProof', {
+        programId: program._id,
+        userId: req.user._id,
+        userName: req.user.name
+      });
+    }
+
+    res.json({ success: true, message: 'Participation submitted for review.' });
+  } catch (err) {
+    console.error('Submit participation error:', err);
     res.status(500).json({ success: false, message: 'Server error' });
   }
 });

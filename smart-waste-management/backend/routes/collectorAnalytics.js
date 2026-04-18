@@ -96,7 +96,7 @@ router.get('/summary', protect, authorize('collector'), async (req, res) => {
     const m  = thisMonth[0] || { collected: 0, weight: 0 };
     const t  = todayAgg[0]  || { collected: 0, active: 0, weight: 0 };
 
-    const completionRate = a.total > 0 ? Math.round((a.collected / a.total) * 100) : 0;
+    const completionRate = a.total > 0 ? Math.round(((a.collected + a.skipped) / a.total) * 100) : 0;
 
     res.json({
       success: true,

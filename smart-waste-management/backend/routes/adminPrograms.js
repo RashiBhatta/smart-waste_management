@@ -20,6 +20,7 @@ const Program    = require('../models/Program');
 const User       = require('../models/User');
 const Transaction = require('../models/Transaction');
 const Notification = require('../models/Notification');
+const Participation = require('../models/Participation');
 const { protect, authorize } = require('../middleware/auth');
 
 // ── Shared: notify resident of approval/rejection ────────────
@@ -275,7 +276,7 @@ router.put('/:id/cancel', protect, authorize('admin'), async (req, res) => {
 });
 
 // ============================================================
-// @desc    APPROVE a volunteer → award coins
+// @desc    APPROVE a volunteer (No coins awarded yet)
 // @route   PUT /api/admin/programs/:id/volunteers/:uid/approve
 // @access  Private/Admin
 // ============================================================
@@ -293,13 +294,65 @@ router.put('/:id/volunteers/:uid/approve', protect, authorize('admin'), async (r
 
     const volunteer = program.volunteers.find(v => v.user.toString() === userId);
     if (!volunteer) return res.status(404).json({ success: false, message: 'Application not found' });
-    if (volunteer.status === 'approved') {
-      return res.status(400).json({ success: false, message: 'Already approved' });
+    if (volunteer.status === 'approved' || volunteer.status === 'completed') {
+      return res.status(400).json({ success: false, message: 'Already approved or completed' });
     }
 
     // Update volunteer status
     volunteer.status     = 'approved';
     volunteer.approvedAt = new Date();
+    program.markModified('volunteers');
+    await program.save();
+
+    const rewardMsg = `Your application to participate in "${program.title}" has been approved. Complete the program to earn ${program.rewardCoins || 100} Eco-Coins!`;
+
+    await notifyResident(resident._id, req.user._id, 'volunteer_approved',
+      '🎉 Application Approved!', rewardMsg,
+      { programId: program._id }
+    );
+
+    const io = req.app.get('io');
+    if (io) {
+      io.to(userId.toString()).emit('applicationApproved', {
+        message: rewardMsg,
+      });
+    }
+
+    res.json({
+      success: true,
+      message: rewardMsg,
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ============================================================
+// @desc    COMPLETE a volunteer program → award coins
+// @route   PUT /api/admin/programs/:id/volunteers/:uid/complete
+// @access  Private/Admin
+// ============================================================
+router.put('/:id/volunteers/:uid/complete', protect, authorize('admin'), async (req, res) => {
+  try {
+    const { id: programId, uid: userId } = req.params;
+
+    const [program, resident] = await Promise.all([
+      Program.findById(programId),
+      User.findById(userId),
+    ]);
+
+    if (!program)  return res.status(404).json({ success: false, message: 'Program not found' });
+    if (!resident) return res.status(404).json({ success: false, message: 'User not found' });
+
+    const volunteer = program.volunteers.find(v => v.user.toString() === userId);
+    if (!volunteer) return res.status(404).json({ success: false, message: 'Application not found' });
+    if (volunteer.status !== 'approved') {
+      return res.status(400).json({ success: false, message: 'Resident must be approved first' });
+    }
+
+    // Update volunteer status
+    volunteer.status      = 'completed';
+    volunteer.completedAt = new Date();
     program.markModified('volunteers');
     await program.save();
 
@@ -316,24 +369,24 @@ router.put('/:id/volunteers/:uid/approve', protect, authorize('admin'), async (r
       user:        resident._id,
       type:        'coin_earned',
       amount:      coinsToAward,
-      description: `Volunteer approved: ${program.title}`,
+      description: `Program completed: ${program.title}`,
       reference:   { programId: program._id },
       balance:     resident.coins,
       status:      'completed',
     });
 
     const rewardMsg = milestoneHit
-      ? `Approved! You earned ${coinsToAward} coins. 🎉 You've reached 1,000 coins and unlocked 1 month of FREE service!`
-      : `Approved! You earned ${coinsToAward} Eco-Coins for "${program.title}".`;
+      ? `Completed! You earned ${coinsToAward} coins. 🎉 You've reached 1,000 coins and unlocked 1 month of FREE service!`
+      : `Completed! You earned ${coinsToAward} Eco-Coins for finishing "${program.title}".`;
 
-    await notifyResident(resident._id, req.user._id, 'volunteer_approved',
-      '🎉 Application Approved!', rewardMsg,
+    await notifyResident(resident._id, req.user._id, 'reward',
+      '🏆 Program Completed!', rewardMsg,
       { programId: program._id, coinsEarned: coinsToAward, totalCoins: resident.coins }
     );
 
     const io = req.app.get('io');
     if (io) {
-      io.to(userId.toString()).emit('applicationApproved', {
+      io.to(userId.toString()).emit('programCompleted', {
         message: rewardMsg,
         coins: resident.coins,
         totalCoinsEarned: newTotal,
@@ -423,27 +476,14 @@ router.put('/:id/volunteers/bulk-approve', protect, authorize('admin'), async (r
 
         const resident = await User.findById(v.user);
         if (resident) {
-          await resident.addCoins(coinsToAward, { type: 'volunteer', programId: program._id });
-          await resident.save();
-
-          await Transaction.create({
-            user:        resident._id,
-            type:        'coin_earned',
-            amount:      coinsToAward,
-            description: `Volunteer approved (bulk): ${program.title}`,
-            reference:   { programId: program._id },
-            balance:     resident.coins,
-            status:      'completed',
-          });
-
           await notifyResident(resident._id, req.user._id, 'volunteer_approved',
             '🎉 Application Approved!',
-            `Approved! You earned ${coinsToAward} Eco-Coins for "${program.title}".`,
-            { programId: program._id, coinsEarned: coinsToAward }
+            `Your application to participate in "${program.title}" has been approved. Complete the program to earn ${coinsToAward} Eco-Coins!`,
+            { programId: program._id }
           );
 
           const io = req.app.get('io');
-          if (io) io.to(v.user.toString()).emit('applicationApproved', { coins: resident.coins });
+          if (io) io.to(v.user.toString()).emit('applicationApproved', { });
 
           results.push({ userId: v.user, success: true });
         }
@@ -461,6 +501,113 @@ router.put('/:id/volunteers/bulk-approve', protect, authorize('admin'), async (r
       message: `Bulk approved ${succeeded} of ${pending.length} volunteers`,
       results,
     });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ============================================================
+// @desc    GET all pending participations (proofs)
+// @route   GET /api/admin/programs/participations/pending
+// @access  Private/Admin
+// ============================================================
+router.get('/participations/pending', protect, authorize('admin'), async (req, res) => {
+  try {
+    const participations = await Participation.find()
+      .populate('resident', 'name email address')
+      .populate('program', 'title rewardCoins organization')
+      .sort({ submittedAt: -1 });
+
+    res.json({ success: true, participations });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ============================================================
+// @desc    REVIEW (Approve) a participation proof -> Awards coins
+// @route   PUT /api/admin/programs/participations/:id/approve
+// @access  Private/Admin
+// ============================================================
+router.put('/participations/:id/approve', protect, authorize('admin'), async (req, res) => {
+  try {
+    const participation = await Participation.findById(req.params.id)
+      .populate('program')
+      .populate('resident');
+
+    if (!participation) return res.status(404).json({ success: false, message: 'Participation not found' });
+    if (participation.status === 'approved') return res.status(400).json({ success: false, message: 'Already approved' });
+
+    participation.status = 'approved';
+    participation.reviewedAt = new Date();
+    await participation.save();
+
+    const program = participation.program;
+    const resident = participation.resident;
+
+    // Update volunteer status to completed in the Program model
+    const volunteer = program.volunteers.find(v => v.user.toString() === resident._id.toString());
+    if (volunteer) {
+      volunteer.status = 'completed';
+      volunteer.completedAt = new Date();
+      program.markModified('volunteers');
+      await program.save();
+    }
+
+    // Award coins using User.addCoins()
+    const coinsToAward = program.rewardCoins || 100;
+    const prevTotal = resident.totalCoinsEarned || 0;
+    await resident.addCoins(coinsToAward, { type: 'volunteer', programId: program._id });
+    await resident.save();
+    const newTotal = resident.totalCoinsEarned || 0;
+    const milestoneHit = prevTotal < 1000 && newTotal >= 1000;
+
+    await Transaction.create({
+      user: resident._id,
+      type: 'coin_earned',
+      amount: coinsToAward,
+      description: `Program proof verified: ${program.title}`,
+      reference: { programId: program._id },
+      balance: resident.coins,
+      status: 'completed',
+    });
+
+    const rewardMsg = milestoneHit
+      ? `Proof verified! You earned ${coinsToAward} coins. 🎉 You've reached 1,000 coins and unlocked 1 month of FREE service!`
+      : `Proof verified! You earned ${coinsToAward} Eco-Coins for finishing "${program.title}".`;
+
+    await notifyResident(resident._id, req.user._id, 'reward', '🏆 Program Completed!', rewardMsg, { programId: program._id });
+
+    res.json({ success: true, message: 'Participation approved and coins awarded', coinsAwarded: coinsToAward, milestoneHit });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ============================================================
+// @desc    REVIEW (Reject) a participation proof
+// @route   PUT /api/admin/programs/participations/:id/reject
+// @access  Private/Admin
+// ============================================================
+router.put('/participations/:id/reject', protect, authorize('admin'), async (req, res) => {
+  try {
+    const { reason } = req.body;
+    const participation = await Participation.findById(req.params.id)
+      .populate('program', 'title');
+
+    if (!participation) return res.status(404).json({ success: false, message: 'Participation not found' });
+    if (participation.status !== 'pending') return res.status(400).json({ success: false, message: 'Can only reject pending participations' });
+
+    participation.status = 'rejected';
+    participation.reviewedAt = new Date();
+    await participation.save();
+
+    await notifyResident(participation.resident, req.user._id, 'system_alert', 
+      'Participation Proof Not Verified',
+      reason ? `Your proof for "${participation.program.title}" was not verified. Reason: ${reason}` : `Your proof for "${participation.program.title}" was not verified.`
+    );
+
+    res.json({ success: true, message: 'Participation proof rejected' });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }

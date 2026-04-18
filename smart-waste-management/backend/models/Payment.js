@@ -131,4 +131,4 @@ const paymentSchema = new mongoose.Schema({
 paymentSchema.index({ user: 1, status: 1, createdAt: -1 });
 paymentSchema.index({ transactionId: 1 });
 
-module.exports = mongoose.model('Payment', paymentSchema);
+module.exports = mongoose.model('Payment', paymentSchema); 

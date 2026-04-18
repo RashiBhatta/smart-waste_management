@@ -804,7 +804,7 @@
 //     // Get collection history
 //     const collectionHistory = await Collection.find({ 
 //       resident: userId,
-//       status: 'Completed'
+//       status: 'Collected'
 //     })
 //     .sort({ createdAt: -1 })
 //     .limit(10);
@@ -844,7 +844,7 @@
 //     // Calculate statistics
 //     const stats = {
 //       totalCollections: await Collection.countDocuments({ resident: userId }),
-//       completedCollections: await Collection.countDocuments({ resident: userId, status: 'Completed' }),
+//       completedCollections: await Collection.countDocuments({ resident: userId, status: 'Collected' }),
 //       pendingCollections: await Collection.countDocuments({ resident: userId, status: 'Pending' }),
 //       totalCoins: user.coins || 0,
 //       totalCoinsEarned: user.totalCoinsEarned || 0,
@@ -1011,7 +1011,7 @@
 // router.get('/stats', protect, authorize('resident'), async (req, res) => {
 //   try {
 //     const [completedCount, pendingCount, userData] = await Promise.all([
-//       Collection.countDocuments({ resident: req.user._id, status: 'Completed' }),
+//       Collection.countDocuments({ resident: req.user._id, status: 'Collected' }),
 //       Collection.countDocuments({ resident: req.user._id, status: 'Pending' }),
 //       User.findById(req.user._id).select('-password')
 //     ]);
@@ -1096,6 +1096,354 @@
 
 
 
+// const express = require('express');
+// const router = express.Router();
+// const User = require('../models/User');
+// const Program = require('../models/Program');
+// const Collection = require('../models/Collection');
+// const Payment = require('../models/Payment');
+// const Transaction = require('../models/Transaction');
+// const Notification = require('../models/Notification');
+// const { protect, authorize } = require('../middleware/auth');
+
+// // @desc    Get resident dashboard data
+// // @route   GET /api/resident/dashboard
+// // @access  Private/Resident
+// router.get('/dashboard', protect, authorize('resident'), async (req, res) => {
+//   try {
+//     const userId = req.user._id;
+    
+//     // Get user with all data
+//     const user = await User.findById(userId);
+    
+//     // Get upcoming collections
+//     const upcomingCollections = await Collection.find({ 
+//       resident: userId,
+//       status: { $in: ['Pending', 'Scheduled'] }
+//     })
+//     .sort({ scheduledDate: 1 })
+//     .limit(5);
+    
+//     // Get collection history
+//     const collectionHistory = await Collection.find({ 
+//       resident: userId,
+//       status: 'Collected'
+//     })
+//     .sort({ createdAt: -1 })
+//     .limit(10);
+    
+//     // Get programs user has joined
+//     const joinedPrograms = await Program.find({
+//       'volunteers.user': userId
+//     })
+//     .select('title organization status startDate endDate volunteers rewardCoins')
+//     .sort({ createdAt: -1 });
+    
+//     // Get available programs (not joined)
+//     const allPrograms = await Program.find({
+//       status: { $in: ['upcoming', 'active'] }
+//     }).select('title organization description zone startDate endDate maxVolunteers volunteers rewardCoins');
+    
+//     const availablePrograms = allPrograms.filter(program => {
+//       return !program.volunteers.some(v => v.user.toString() === userId.toString());
+//     });
+    
+//     // Get payment history
+//     const payments = await Payment.find({ user: userId })
+//       .sort({ createdAt: -1 })
+//       .limit(6);
+    
+//     // Get transaction history
+//     let transactions = [];
+//     try {
+//       transactions = await Transaction.find({ user: userId })
+//         .sort({ createdAt: -1 })
+//         .limit(10);
+//     } catch (e) {
+//       console.log("Transactions not found, skipping.");
+//     }
+    
+//     // Get unread notifications count
+//     const unreadNotifications = await Notification.countDocuments({ 
+//       recipient: userId, 
+//       read: false 
+//     });
+    
+//     // Calculate statistics
+//     const stats = {
+//       totalCollections: await Collection.countDocuments({ resident: userId }),
+//       completedCollections: await Collection.countDocuments({ resident: userId, status: 'Collected' }),
+//       pendingCollections: await Collection.countDocuments({ resident: userId, status: 'Pending' }),
+//       totalCoins: user.coins || 0,
+//       totalCoinsEarned: user.totalCoinsEarned || 0,
+//       freeServiceUntil: user.freeServiceUntil,
+//       isServiceFree: user.isServiceFree || false,
+//       monthlyFeePaid: user.monthlyFeePaid || false,
+//       paymentStatus: user.paymentStatus || 'pending',
+//       joinedProgramsCount: joinedPrograms.length,
+//       availableProgramsCount: availablePrograms.length,
+//       coinsUntilFree: Math.max(0, 1000 - (user.totalCoinsEarned || 0))
+//     };
+    
+//     res.json({
+//       success: true,
+//       user: {
+//         name: user.name,
+//         email: user.email,
+//         phone: user.phone,
+//         address: user.address,
+//         coins: user.coins || 0,
+//         totalCoinsEarned: user.totalCoinsEarned || 0,
+//         isServiceFree: user.isServiceFree || false,
+//         freeServiceUntil: user.freeServiceUntil,
+//         paymentStatus: user.paymentStatus || 'pending',
+//         monthlyFeePaid: user.monthlyFeePaid || false
+//       },
+//       stats,
+//       upcomingCollections,
+//       collectionHistory,
+//       joinedPrograms,
+//       availablePrograms: availablePrograms.slice(0, 10),
+//       payments,
+//       transactions,
+//       unreadNotifications
+//     });
+//   } catch (error) {
+//     console.error('Resident dashboard error:', error);
+//     res.status(500).json({ success: false, message: error.message });
+//   }
+// });
+
+// // @desc    Get resident coin balance and transactions
+// // @route   GET /api/resident/coins
+// // @access  Private (Graceful fail for non-residents)
+// router.get('/coins', protect, async (req, res) => {
+//   try {
+//     // FIX: If an admin or collector accidentally calls this via context, return gracefully.
+//     if (req.user.role !== 'resident') {
+//       return res.json({
+//         success: true,
+//         balance: 0,
+//         totalEarned: 0,
+//         freeServiceUntil: null,
+//         isServiceFree: false,
+//         transactions: []
+//       });
+//     }
+
+//     const user = await User.findById(req.user._id);
+    
+//     let transactions = [];
+//     try {
+//       transactions = await Transaction.find({ user: req.user._id })
+//         .sort({ createdAt: -1 })
+//         .limit(20);
+//     } catch (e) {
+//       console.log("No transaction model or records yet.");
+//     }
+    
+//     res.json({
+//       success: true,
+//       balance: user.coins || 0,
+//       totalEarned: user.totalCoinsEarned || 0,
+//       freeServiceUntil: user.freeServiceUntil,
+//       isServiceFree: user.isServiceFree || false,
+//       transactions
+//     });
+//   } catch (error) {
+//     console.error('Error fetching coin data:', error);
+//     res.status(500).json({ success: false, message: error.message });
+//   }
+// });
+
+// // @desc    Get resident's joined programs
+// // @route   GET /api/resident/my-programs
+// // @access  Private/Resident
+// router.get('/my-programs', protect, authorize('resident'), async (req, res) => {
+//   try {
+//     const programs = await Program.find({
+//       'volunteers.user': req.user._id
+//     })
+//     .sort({ createdAt: -1 })
+//     .select('title organization description zone startDate endDate status volunteers rewardCoins');
+    
+//     const formattedPrograms = programs.map(program => {
+//       const userApplication = program.volunteers.find(v => v.user.toString() === req.user._id.toString());
+//       return {
+//         _id: program._id,
+//         title: program.title,
+//         organization: program.organization,
+//         description: program.description,
+//         zone: program.zone,
+//         startDate: program.startDate,
+//         endDate: program.endDate,
+//         status: program.status,
+//         volunteerStatus: userApplication ? userApplication.status : null,
+//         appliedAt: userApplication ? userApplication.appliedAt : null,
+//         approvedAt: userApplication ? userApplication.approvedAt : null,
+//         rewardCoins: program.rewardCoins || 100
+//       };
+//     });
+    
+//     res.json({ success: true, programs: formattedPrograms });
+//   } catch (error) {
+//     console.error('Error fetching my programs:', error);
+//     res.status(500).json({ success: false, message: error.message });
+//   }
+// });
+
+// // @desc    Get resident's collections
+// // @route   GET /api/resident/collections
+// // @access  Private/Resident
+// router.get('/collections', protect, authorize('resident'), async (req, res) => {
+//   try {
+//     const collections = await Collection.find({ resident: req.user._id })
+//       .populate('collector', 'name phone')
+//       .sort({ createdAt: -1 });
+    
+//     res.json({ success: true, collections });
+//   } catch (error) {
+//     console.error('Error fetching collections:', error);
+//     res.status(500).json({ success: false, message: error.message });
+//   }
+// });
+
+// // @desc    Request waste collection
+// // @route   POST /api/resident/request-collection
+// // @access  Private/Resident
+// router.post('/request-collection', protect, authorize('resident'), async (req, res) => {
+//   try {
+//     const { wasteType, estimatedWeight, notes } = req.body;
+    
+//     const collection = await Collection.create({
+//       resident: req.user._id,
+//       address: req.user.address,
+//       scheduledDate: new Date(),
+//       wasteType: wasteType || 'Mixed',
+//       estimatedWeight: estimatedWeight || 0,
+//       notes,
+//       status: 'Pending'
+//     });
+    
+//     // Notify admins
+//     const admins = await User.find({ role: 'admin' });
+//     await Notification.insertMany(admins.map(admin => ({
+//       recipient: admin._id,
+//       sender: req.user._id,
+//       type: 'collection_update',
+//       title: 'New Collection Request',
+//       message: `${req.user.name} requested waste collection`,
+//       data: { collectionId: collection._id }
+//     })));
+    
+//     const io = req.app.get('io');
+//     if (io) {
+//       io.to('admins').emit('new_collection_request', {
+//         collectionId: collection._id,
+//         resident: req.user.name
+//       });
+//     }
+    
+//     res.status(201).json({ success: true, collection });
+//   } catch (error) {
+//     console.error('Error requesting collection:', error);
+//     res.status(500).json({ success: false, message: error.message });
+//   }
+// });
+
+// // @desc    Get resident stats (for backward compatibility)
+// // @route   GET /api/resident/stats
+// // @access  Private/Resident
+// router.get('/stats', protect, authorize('resident'), async (req, res) => {
+//   try {
+//     const [completedCount, pendingCount, userData] = await Promise.all([
+//       Collection.countDocuments({ resident: req.user._id, status: 'Collected' }),
+//       Collection.countDocuments({ resident: req.user._id, status: 'Pending' }),
+//       User.findById(req.user._id).select('-password')
+//     ]);
+
+//     if (!userData) {
+//       return res.status(404).json({ success: false, message: 'User not found' });
+//     }
+
+//     res.json({
+//       success: true,
+//       stats: {
+//         completedCollections: completedCount || 0,
+//         pendingCollections: pendingCount || 0,
+//         coins: userData.coins || 0,
+//         totalCoinsEarned: userData.totalCoinsEarned || 0,
+//         freeServiceMonths: userData.freeServiceMonths || 0,
+//         name: userData.name,
+//         email: userData.email,
+//         phone: userData.phone,
+//         address: userData.address,
+//         monthlyFeePaid: userData.monthlyFeePaid || false,
+//         isServiceFree: userData.isServiceFree || false,
+//         freeServiceUntil: userData.freeServiceUntil
+//       }
+//     });
+//   } catch (error) {
+//     console.error('Resident Stats Error:', error.message);
+//     res.status(500).json({ 
+//       success: false, 
+//       message: 'Server error while syncing dashboard data' 
+//     });
+//   }
+// });
+
+// // @desc    Toggle/Verify monthly fee payment
+// // @route   PUT /api/resident/verify-payment
+// // @access  Private/Resident
+// router.put('/verify-payment', protect, authorize('resident'), async (req, res) => {
+//   try {
+//     const user = await User.findByIdAndUpdate(
+//       req.user._id,
+//       { 
+//         monthlyFeePaid: true, 
+//         paymentStatus: 'paid',
+//         lastPaymentDate: new Date(),
+//         nextPaymentDue: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
+//       },
+//       { new: true }
+//     );
+    
+//     // Create payment record
+//     await Payment.create({
+//       user: user._id,
+//       amount: 1000,
+//       type: 'monthly_fee',
+//       status: 'completed',
+//       paymentMethod: 'wallet',
+//       paidForMonth: {
+//         month: new Date().getMonth() + 1,
+//         year: new Date().getFullYear()
+//       },
+//       paidDate: new Date()
+//     });
+    
+//     // Create transaction record
+//     try {
+//       await Transaction.create({
+//         user: user._id,
+//         type: 'payment',
+//         amount: 1000,
+//         description: 'Monthly waste collection fee',
+//         balance: user.coins
+//       });
+//     } catch (e) {
+//       console.log("Transaction creation skipped.");
+//     }
+    
+//     res.json({ success: true, message: "Payment verified", user });
+//   } catch (error) {
+//     res.status(500).json({ success: false, message: error.message });
+//   }
+// });
+
+// module.exports = router;
+
+
 const express = require('express');
 const router = express.Router();
 const User = require('../models/User');
@@ -1106,107 +1454,100 @@ const Transaction = require('../models/Transaction');
 const Notification = require('../models/Notification');
 const { protect, authorize } = require('../middleware/auth');
 
-// @desc    Get resident dashboard data
-// @route   GET /api/resident/dashboard
-// @access  Private/Resident
+const COINS_FOR_FREE_SERVICE = 1000;
+
+// ── Helper: check & grant free service if threshold reached ──
+async function checkAndGrantFreeService(user) {
+  const totalEarned = user.totalCoinsEarned || 0;
+  const milestones  = Math.floor(totalEarned / COINS_FOR_FREE_SERVICE);
+  const granted     = user.freeServiceMonthsGranted || 0;
+
+  if (milestones > granted) {
+    const newMonths = milestones - granted;
+    const until = new Date();
+    until.setMonth(until.getMonth() + newMonths);
+
+    user.freeServiceMonthsGranted = milestones;
+    user.freeServiceMonths = (user.freeServiceMonths || 0) + newMonths;
+    user.isServiceFree     = true;
+    user.freeServiceUntil  = until;
+    user.monthlyFeePaid    = true;
+
+    await user.save();
+
+    // Notify resident
+    await Notification.create({
+      recipient: user._id,
+      type: 'reward',
+      title: '🎉 Free Service Unlocked!',
+      message: `You've earned ${totalEarned} coins and unlocked ${newMonths} month(s) of free waste collection!`,
+      priority: 'high'
+    }).catch(() => {});
+
+    return true;
+  }
+  return false;
+}
+
+// ── GET /api/resident/dashboard ───────────────────────────────
 router.get('/dashboard', protect, authorize('resident'), async (req, res) => {
   try {
     const userId = req.user._id;
-    
-    // Get user with all data
-    const user = await User.findById(userId);
-    
-    // Get upcoming collections
-    const upcomingCollections = await Collection.find({ 
-      resident: userId,
-      status: { $in: ['Pending', 'Scheduled'] }
-    })
-    .sort({ scheduledDate: 1 })
-    .limit(5);
-    
-    // Get collection history
-    const collectionHistory = await Collection.find({ 
-      resident: userId,
-      status: 'Completed'
-    })
-    .sort({ createdAt: -1 })
-    .limit(10);
-    
-    // Get programs user has joined
-    const joinedPrograms = await Program.find({
-      'volunteers.user': userId
-    })
-    .select('title organization status startDate endDate volunteers rewardCoins')
-    .sort({ createdAt: -1 });
-    
-    // Get available programs (not joined)
-    const allPrograms = await Program.find({
-      status: { $in: ['upcoming', 'active'] }
-    }).select('title organization description zone startDate endDate maxVolunteers volunteers rewardCoins');
-    
-    const availablePrograms = allPrograms.filter(program => {
-      return !program.volunteers.some(v => v.user.toString() === userId.toString());
-    });
-    
-    // Get payment history
-    const payments = await Payment.find({ user: userId })
-      .sort({ createdAt: -1 })
-      .limit(6);
-    
-    // Get transaction history
+    const user   = await User.findById(userId);
+
+    // Auto-check free service
+    await checkAndGrantFreeService(user);
+
+    const [upcomingCollections, collectionHistory, allPrograms, payments] = await Promise.all([
+      Collection.find({ resident: userId, status: { $in: ['Pending', 'Scheduled'] } }).sort({ scheduledDate: 1 }).limit(5),
+      Collection.find({ resident: userId, status: 'Collected' }).sort({ createdAt: -1 }).limit(10),
+      Program.find({ status: { $in: ['upcoming', 'active'] } }).select('title organization description zone startDate endDate volunteerLimit volunteers rewardCoins'),
+      Payment.find({ user: userId }).sort({ createdAt: -1 }).limit(6)
+    ]);
+
+    const joinedPrograms = await Program.find({ 'volunteers.user': userId })
+      .select('title organization status startDate endDate volunteers rewardCoins')
+      .sort({ createdAt: -1 });
+
+    const availablePrograms = allPrograms.filter(p =>
+      !p.volunteers.some(v => v.user.toString() === userId.toString())
+    );
+
     let transactions = [];
-    try {
-      transactions = await Transaction.find({ user: userId })
-        .sort({ createdAt: -1 })
-        .limit(10);
-    } catch (e) {
-      console.log("Transactions not found, skipping.");
-    }
-    
-    // Get unread notifications count
-    const unreadNotifications = await Notification.countDocuments({ 
-      recipient: userId, 
-      read: false 
-    });
-    
-    // Calculate statistics
+    try { transactions = await Transaction.find({ user: userId }).sort({ createdAt: -1 }).limit(10); } catch (e) {}
+
+    const unreadNotifications = await Notification.countDocuments({ recipient: userId, read: false });
+
+    const totalEarned  = user.totalCoinsEarned || 0;
+    const coinsUntilFree = Math.max(0, COINS_FOR_FREE_SERVICE - (totalEarned % COINS_FOR_FREE_SERVICE));
+
     const stats = {
-      totalCollections: await Collection.countDocuments({ resident: userId }),
-      completedCollections: await Collection.countDocuments({ resident: userId, status: 'Completed' }),
-      pendingCollections: await Collection.countDocuments({ resident: userId, status: 'Pending' }),
-      totalCoins: user.coins || 0,
-      totalCoinsEarned: user.totalCoinsEarned || 0,
-      freeServiceUntil: user.freeServiceUntil,
-      isServiceFree: user.isServiceFree || false,
-      monthlyFeePaid: user.monthlyFeePaid || false,
-      paymentStatus: user.paymentStatus || 'pending',
-      joinedProgramsCount: joinedPrograms.length,
+      totalCollections:      await Collection.countDocuments({ resident: userId }),
+      completedCollections:  await Collection.countDocuments({ resident: userId, status: 'Collected' }),
+      pendingCollections:    await Collection.countDocuments({ resident: userId, status: 'Pending' }),
+      totalCoins:            user.coins || 0,
+      totalCoinsEarned:      totalEarned,
+      freeServiceUntil:      user.freeServiceUntil,
+      isServiceFree:         user.isServiceFree || false,
+      monthlyFeePaid:        user.monthlyFeePaid || false,
+      paymentStatus:         user.paymentStatus || 'pending',
+      joinedProgramsCount:   joinedPrograms.length,
       availableProgramsCount: availablePrograms.length,
-      coinsUntilFree: Math.max(0, 1000 - (user.totalCoinsEarned || 0))
+      coinsUntilFree,
+      progressPercent: Math.min(Math.round((totalEarned % COINS_FOR_FREE_SERVICE) / COINS_FOR_FREE_SERVICE * 100), 100)
     };
-    
+
     res.json({
       success: true,
       user: {
-        name: user.name,
-        email: user.email,
-        phone: user.phone,
-        address: user.address,
-        coins: user.coins || 0,
-        totalCoinsEarned: user.totalCoinsEarned || 0,
-        isServiceFree: user.isServiceFree || false,
-        freeServiceUntil: user.freeServiceUntil,
-        paymentStatus: user.paymentStatus || 'pending',
-        monthlyFeePaid: user.monthlyFeePaid || false
+        name: user.name, email: user.email, phone: user.phone, address: user.address,
+        coins: user.coins || 0, totalCoinsEarned: totalEarned,
+        isServiceFree: user.isServiceFree || false, freeServiceUntil: user.freeServiceUntil,
+        paymentStatus: user.paymentStatus || 'pending', monthlyFeePaid: user.monthlyFeePaid || false
       },
-      stats,
-      upcomingCollections,
-      collectionHistory,
-      joinedPrograms,
-      availablePrograms: availablePrograms.slice(0, 10),
-      payments,
-      transactions,
-      unreadNotifications
+      stats, upcomingCollections, collectionHistory,
+      joinedPrograms, availablePrograms: availablePrograms.slice(0, 10),
+      payments, transactions, unreadNotifications
     });
   } catch (error) {
     console.error('Resident dashboard error:', error);
@@ -1214,40 +1555,36 @@ router.get('/dashboard', protect, authorize('resident'), async (req, res) => {
   }
 });
 
-// @desc    Get resident coin balance and transactions
-// @route   GET /api/resident/coins
-// @access  Private (Graceful fail for non-residents)
+// ── GET /api/resident/coins ───────────────────────────────────
 router.get('/coins', protect, async (req, res) => {
   try {
-    // FIX: If an admin or collector accidentally calls this via context, return gracefully.
     if (req.user.role !== 'resident') {
-      return res.json({
-        success: true,
-        balance: 0,
-        totalEarned: 0,
-        freeServiceUntil: null,
-        isServiceFree: false,
-        transactions: []
-      });
+      return res.json({ success: true, balance: 0, totalEarned: 0, freeServiceUntil: null, isServiceFree: false, transactions: [], progressPercent: 0, coinsUntilFree: COINS_FOR_FREE_SERVICE });
     }
 
     const user = await User.findById(req.user._id);
-    
+
+    // ✅ Auto-check and grant free service if earned enough
+    await checkAndGrantFreeService(user);
+
+    const totalEarned    = user.totalCoinsEarned || 0;
+    const progressPct    = Math.min(Math.round((totalEarned % COINS_FOR_FREE_SERVICE) / COINS_FOR_FREE_SERVICE * 100), 100);
+    const coinsUntilFree = totalEarned >= COINS_FOR_FREE_SERVICE
+      ? Math.max(0, COINS_FOR_FREE_SERVICE - (totalEarned % COINS_FOR_FREE_SERVICE))
+      : Math.max(0, COINS_FOR_FREE_SERVICE - totalEarned);
+
     let transactions = [];
-    try {
-      transactions = await Transaction.find({ user: req.user._id })
-        .sort({ createdAt: -1 })
-        .limit(20);
-    } catch (e) {
-      console.log("No transaction model or records yet.");
-    }
-    
+    try { transactions = await Transaction.find({ user: req.user._id }).sort({ createdAt: -1 }).limit(20); } catch (e) {}
+
     res.json({
-      success: true,
-      balance: user.coins || 0,
-      totalEarned: user.totalCoinsEarned || 0,
+      success:         true,
+      balance:         user.coins || 0,
+      totalEarned,
+      progressPercent: progressPct,
+      coinsUntilFree,
       freeServiceUntil: user.freeServiceUntil,
-      isServiceFree: user.isServiceFree || false,
+      isServiceFree:    user.isServiceFree || false,
+      freeMonthsTotal:  user.freeServiceMonths || 0,
       transactions
     });
   } catch (error) {
@@ -1256,186 +1593,140 @@ router.get('/coins', protect, async (req, res) => {
   }
 });
 
-// @desc    Get resident's joined programs
-// @route   GET /api/resident/my-programs
-// @access  Private/Resident
+// ── GET /api/resident/my-programs ────────────────────────────
 router.get('/my-programs', protect, authorize('resident'), async (req, res) => {
   try {
-    const programs = await Program.find({
-      'volunteers.user': req.user._id
-    })
-    .sort({ createdAt: -1 })
-    .select('title organization description zone startDate endDate status volunteers rewardCoins');
-    
-    const formattedPrograms = programs.map(program => {
-      const userApplication = program.volunteers.find(v => v.user.toString() === req.user._id.toString());
+    const programs = await Program.find({ 'volunteers.user': req.user._id })
+      .sort({ createdAt: -1 })
+      .select('title organization description zone startDate endDate status volunteers rewardCoins');
+
+    const formatted = programs.map(p => {
+      const vol = p.volunteers.find(v => v.user.toString() === req.user._id.toString());
       return {
-        _id: program._id,
-        title: program.title,
-        organization: program.organization,
-        description: program.description,
-        zone: program.zone,
-        startDate: program.startDate,
-        endDate: program.endDate,
-        status: program.status,
-        volunteerStatus: userApplication ? userApplication.status : null,
-        appliedAt: userApplication ? userApplication.appliedAt : null,
-        approvedAt: userApplication ? userApplication.approvedAt : null,
-        rewardCoins: program.rewardCoins || 100
+        _id: p._id, title: p.title, organization: p.organization,
+        description: p.description, zone: p.zone,
+        startDate: p.startDate, endDate: p.endDate, status: p.status,
+        volunteerStatus: vol?.status || null,
+        appliedAt:  vol?.joinedAt   || null,
+        approvedAt: vol?.approvedAt || null,
+        rewardCoins: p.rewardCoins || 100
       };
     });
-    
-    res.json({ success: true, programs: formattedPrograms });
+
+    res.json({ success: true, programs: formatted });
   } catch (error) {
-    console.error('Error fetching my programs:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 });
 
-// @desc    Get resident's collections
-// @route   GET /api/resident/collections
-// @access  Private/Resident
+// ── GET /api/resident/collections ────────────────────────────
 router.get('/collections', protect, authorize('resident'), async (req, res) => {
   try {
     const collections = await Collection.find({ resident: req.user._id })
       .populate('collector', 'name phone')
       .sort({ createdAt: -1 });
-    
     res.json({ success: true, collections });
   } catch (error) {
-    console.error('Error fetching collections:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 });
 
-// @desc    Request waste collection
-// @route   POST /api/resident/request-collection
-// @access  Private/Resident
+// ── POST /api/resident/request-collection ────────────────────
 router.post('/request-collection', protect, authorize('resident'), async (req, res) => {
   try {
     const { wasteType, estimatedWeight, notes } = req.body;
-    
+
     const collection = await Collection.create({
       resident: req.user._id,
       address: req.user.address,
       scheduledDate: new Date(),
       wasteType: wasteType || 'Mixed',
       estimatedWeight: estimatedWeight || 0,
-      notes,
-      status: 'Pending'
+      notes, status: 'Pending'
     });
-    
-    // Notify admins
+
     const admins = await User.find({ role: 'admin' });
     await Notification.insertMany(admins.map(admin => ({
-      recipient: admin._id,
-      sender: req.user._id,
-      type: 'collection_update',
-      title: 'New Collection Request',
+      recipient: admin._id, sender: req.user._id,
+      type: 'collection_update', title: 'New Collection Request',
       message: `${req.user.name} requested waste collection`,
       data: { collectionId: collection._id }
     })));
-    
+
     const io = req.app.get('io');
-    if (io) {
-      io.to('admins').emit('new_collection_request', {
-        collectionId: collection._id,
-        resident: req.user.name
-      });
-    }
-    
+    if (io) io.to('admins').emit('new_collection_request', { collectionId: collection._id, resident: req.user.name });
+
     res.status(201).json({ success: true, collection });
   } catch (error) {
-    console.error('Error requesting collection:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 });
 
-// @desc    Get resident stats (for backward compatibility)
-// @route   GET /api/resident/stats
-// @access  Private/Resident
+// ── GET /api/resident/stats ──────────────────────────────────
 router.get('/stats', protect, authorize('resident'), async (req, res) => {
   try {
     const [completedCount, pendingCount, userData] = await Promise.all([
-      Collection.countDocuments({ resident: req.user._id, status: 'Completed' }),
+      Collection.countDocuments({ resident: req.user._id, status: 'Collected' }),
       Collection.countDocuments({ resident: req.user._id, status: 'Pending' }),
       User.findById(req.user._id).select('-password')
     ]);
 
-    if (!userData) {
-      return res.status(404).json({ success: false, message: 'User not found' });
-    }
+    if (!userData) return res.status(404).json({ success: false, message: 'User not found' });
+
+    const totalEarned = userData.totalCoinsEarned || 0;
 
     res.json({
       success: true,
       stats: {
         completedCollections: completedCount || 0,
-        pendingCollections: pendingCount || 0,
-        coins: userData.coins || 0,
-        totalCoinsEarned: userData.totalCoinsEarned || 0,
-        freeServiceMonths: userData.freeServiceMonths || 0,
-        name: userData.name,
-        email: userData.email,
-        phone: userData.phone,
-        address: userData.address,
-        monthlyFeePaid: userData.monthlyFeePaid || false,
-        isServiceFree: userData.isServiceFree || false,
-        freeServiceUntil: userData.freeServiceUntil
+        pendingCollections:   pendingCount   || 0,
+        coins:                userData.coins || 0,
+        totalCoinsEarned:     totalEarned,
+        progressPercent:      Math.min(Math.round((totalEarned % COINS_FOR_FREE_SERVICE) / COINS_FOR_FREE_SERVICE * 100), 100),
+        coinsUntilFree:       Math.max(0, COINS_FOR_FREE_SERVICE - (totalEarned % COINS_FOR_FREE_SERVICE)),
+        freeServiceMonths:    userData.freeServiceMonths || 0,
+        name:                 userData.name,
+        email:                userData.email,
+        phone:                userData.phone,
+        address:              userData.address,
+        monthlyFeePaid:       userData.monthlyFeePaid || false,
+        isServiceFree:        userData.isServiceFree  || false,
+        freeServiceUntil:     userData.freeServiceUntil
       }
     });
   } catch (error) {
-    console.error('Resident Stats Error:', error.message);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Server error while syncing dashboard data' 
-    });
+    res.status(500).json({ success: false, message: error.message });
   }
 });
 
-// @desc    Toggle/Verify monthly fee payment
-// @route   PUT /api/resident/verify-payment
-// @access  Private/Resident
+// ── PUT /api/resident/verify-payment ─────────────────────────
 router.put('/verify-payment', protect, authorize('resident'), async (req, res) => {
   try {
     const user = await User.findByIdAndUpdate(
       req.user._id,
-      { 
-        monthlyFeePaid: true, 
-        paymentStatus: 'paid',
+      {
+        monthlyFeePaid: true, paymentStatus: 'paid',
         lastPaymentDate: new Date(),
         nextPaymentDue: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
       },
       { new: true }
     );
-    
-    // Create payment record
+
     await Payment.create({
-      user: user._id,
-      amount: 1000,
-      type: 'monthly_fee',
-      status: 'completed',
-      paymentMethod: 'wallet',
-      paidForMonth: {
-        month: new Date().getMonth() + 1,
-        year: new Date().getFullYear()
-      },
+      user: user._id, amount: 1000, type: 'monthly_fee',
+      status: 'completed', paymentMethod: 'wallet',
+      paidForMonth: { month: new Date().getMonth() + 1, year: new Date().getFullYear() },
       paidDate: new Date()
     });
-    
-    // Create transaction record
+
     try {
       await Transaction.create({
-        user: user._id,
-        type: 'payment',
-        amount: 1000,
-        description: 'Monthly waste collection fee',
-        balance: user.coins
+        user: user._id, type: 'payment', amount: 1000,
+        description: 'Monthly waste collection fee', balance: user.coins
       });
-    } catch (e) {
-      console.log("Transaction creation skipped.");
-    }
-    
-    res.json({ success: true, message: "Payment verified", user });
+    } catch (e) {}
+
+    res.json({ success: true, message: 'Payment verified', user });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

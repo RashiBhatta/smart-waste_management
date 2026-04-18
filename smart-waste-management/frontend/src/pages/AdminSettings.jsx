@@ -22,7 +22,7 @@
 //   return (
 //     <Box sx={{ p: 4, mt: 8 }}>
 //       <Typography variant="h4" fontWeight={900} mb={4}>System Settings</Typography>
-      
+
 //       <Grid container spacing={4}>
 //         <Grid item xs={12} md={6}>
 //           <Paper sx={{ p: 3, borderRadius: 4, border: '1px solid #eee' }}>
@@ -32,7 +32,7 @@
 //             <Typography variant="body2" color="textSecondary" mb={3}>
 //               Define the wards or zones available for Residents and Collectors.
 //             </Typography>
-            
+
 //             <Stack direction="row" spacing={1} mb={3}>
 //               <TextField 
 //                 fullWidth size="small" 
@@ -142,7 +142,7 @@ const AdminSettings = () => {
   const { user } = useAuth();
   const [loading, setLoading] = useState(false);
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
-  
+
   // Settings state
   const [settings, setSettings] = useState({
     siteName: 'SWM System',
@@ -299,8 +299,8 @@ const AdminSettings = () => {
           <SettingSection title="Notifications" icon={<NotificationsIcon />}>
             <List>
               <ListItem>
-                <ListItemText 
-                  primary="Enable Notifications" 
+                <ListItemText
+                  primary="Enable Notifications"
                   secondary="Show notifications in the app"
                 />
                 <ListItemSecondaryAction>
@@ -312,8 +312,8 @@ const AdminSettings = () => {
               </ListItem>
               <Divider />
               <ListItem>
-                <ListItemText 
-                  primary="Email Alerts" 
+                <ListItemText
+                  primary="Email Alerts"
                   secondary="Send email notifications"
                 />
                 <ListItemSecondaryAction>
@@ -325,8 +325,8 @@ const AdminSettings = () => {
               </ListItem>
               <Divider />
               <ListItem>
-                <ListItemText 
-                  primary="SMS Alerts" 
+                <ListItemText
+                  primary="SMS Alerts"
                   secondary="Send SMS notifications"
                 />
                 <ListItemSecondaryAction>
@@ -345,8 +345,8 @@ const AdminSettings = () => {
           <SettingSection title="Security" icon={<SecurityIcon />}>
             <List>
               <ListItem>
-                <ListItemText 
-                  primary="Maintenance Mode" 
+                <ListItemText
+                  primary="Maintenance Mode"
                   secondary="Temporarily disable access"
                 />
                 <ListItemSecondaryAction>
@@ -358,8 +358,8 @@ const AdminSettings = () => {
               </ListItem>
               <Divider />
               <ListItem>
-                <ListItemText 
-                  primary="Debug Mode" 
+                <ListItemText
+                  primary="Debug Mode"
                   secondary="Enable debugging features"
                 />
                 <ListItemSecondaryAction>

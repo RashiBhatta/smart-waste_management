@@ -164,6 +164,7 @@ const ManagePrograms = () => {
   const [activeTab,    setActiveTab]    = useState(0);
   const [programs,     setPrograms]     = useState([]);
   const [pendingQueue, setPendingQueue] = useState([]);
+  const [participations, setParticipations] = useState([]);
   const [loading,      setLoading]      = useState(true);
   const [mobileOpen,   setMobileOpen]   = useState(false);
 
@@ -177,7 +178,7 @@ const ManagePrograms = () => {
   const [cancelReason, setCancelReason] = useState('');
 
   // Volunteer review dialog (single program)
-  const [reviewDialog, setReviewDialog] = useState({ open: false, prog: null });
+  const [reviewDialog, setReviewDialog] = useState({ open: false, prog: null, activeTab: 0 });
 
   // Action in progress
   const [acting, setActing] = useState(null); // `${programId}-${userId}`
@@ -186,24 +187,30 @@ const ManagePrograms = () => {
   const fetchPrograms = useCallback(async () => {
     try {
       setLoading(true);
-      const [progRes, pendRes] = await Promise.all([
+      const [progRes, pendRes, partRes] = await Promise.all([
         api.get('/admin/programs'),
         api.get('/admin/programs/pending'),
+        api.get('/admin/programs/participations/pending'),
       ]);
       setPrograms(progRes.data.programs || []);
       setPendingQueue(pendRes.data.queue || []);
+      setParticipations(partRes.data.participations || []);
     } catch { toast.error('Failed to load programs'); }
     finally  { setLoading(false); }
   }, []);
 
   useEffect(() => { fetchPrograms(); }, [fetchPrograms]);
 
-  // Socket: new application
+  // Socket: new application or new proof
   useEffect(() => {
     if (!socket) return;
     const refresh = () => fetchPrograms();
     socket.on('newVolunteerApplication', refresh);
-    return () => socket.off('newVolunteerApplication', refresh);
+    socket.on('newParticipationProof', refresh);
+    return () => {
+      socket.off('newVolunteerApplication', refresh);
+      socket.off('newParticipationProof', refresh);
+    }
   }, [socket, fetchPrograms]);
 
   // ── Form helpers ──────────────────────────────────────────
@@ -316,8 +323,33 @@ const ManagePrograms = () => {
       await api.put(`/admin/programs/${programId}/volunteers/${userId}/reject`);
       toast.success('Application rejected');
       fetchPrograms();
+      // Refresh review dialog if open
+      if (reviewDialog.prog?._id === programId) {
+        const updated = await api.get('/admin/programs');
+        const prog = updated.data.programs.find(p => p._id === programId);
+        if (prog) setReviewDialog(d => ({ ...d, prog }));
+      }
     } catch (err) {
       toast.error(err.response?.data?.message || 'Rejection failed');
+    } finally { setActing(null); }
+  };
+
+  // ── Complete volunteer ────────────────────────────────────
+  const handleComplete = async (programId, userId) => {
+    const key = `${programId}-${userId}`;
+    try {
+      setActing(key);
+      const res = await api.put(`/admin/programs/${programId}/volunteers/${userId}/complete`);
+      toast.success(res.data.message || 'Volunteer completed');
+      fetchPrograms();
+      // Refresh review dialog if open
+      if (reviewDialog.prog?._id === programId) {
+        const updated = await api.get('/admin/programs');
+        const prog = updated.data.programs.find(p => p._id === programId);
+        if (prog) setReviewDialog(d => ({ ...d, prog }));
+      }
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Completion failed');
     } finally { setActing(null); }
   };
 
@@ -334,7 +366,31 @@ const ManagePrograms = () => {
     } finally { setActing(null); }
   };
 
+  // ── Approve participation proof ───────────────────────────
+  const handleApproveParticipation = async (id) => {
+    try {
+      setActing(`proof-${id}`);
+      const res = await api.put(`/admin/programs/participations/${id}/approve`);
+      toast.success(res.data.message);
+      fetchPrograms();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Approval failed');
+    } finally { setActing(null); }
+  };
+
+  const handleRejectParticipation = async (id) => {
+    try {
+      setActing(`proof-${id}`);
+      await api.put(`/admin/programs/participations/${id}/reject`, { reason: 'Proof insufficient or invalid' });
+      toast.success('Participation proof rejected');
+      fetchPrograms();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Rejection failed');
+    } finally { setActing(null); }
+  };
+
   const totalPending = pendingQueue.length;
+  const pendingParticipations = participations.filter(p => p.status === 'pending');
 
   // ── Sidebar ───────────────────────────────────────────────
   const navItems = [
@@ -439,6 +495,17 @@ const ManagePrograms = () => {
                   color:   activeTab === 1 ? 'white' : '#0f172a',
                   borderColor: '#e2e8f0' }}>
                 Pending Approvals
+              </Button>
+            </Badge>
+            <Badge badgeContent={pendingParticipations.length} color="secondary" max={99}>
+              <Button
+                variant={activeTab === 2 ? 'contained' : 'outlined'}
+                onClick={() => setActiveTab(2)}
+                sx={{ borderRadius: 2, fontWeight: 800,
+                  bgcolor: activeTab === 2 ? '#8b5cf6' : 'white',
+                  color:   activeTab === 2 ? 'white' : '#0f172a',
+                  borderColor: '#e2e8f0' }}>
+                Proof Reviews
               </Button>
             </Badge>
           </Stack>
@@ -555,6 +622,65 @@ const ManagePrograms = () => {
                     ))}
                   </Stack>
                 </Paper>
+              )}
+            </>
+          )}
+
+          {/* ── TAB 2: PARTICIPATION PROOFS ── */}
+          {activeTab === 2 && (
+            <>
+              {pendingParticipations.length === 0 ? (
+                <Paper elevation={0} sx={{ p: 8, textAlign: 'center', borderRadius: 4, border: '2px dashed #e2e8f0' }}>
+                  <TaskAlt sx={{ fontSize: 72, color: '#e2e8f0', mb: 2 }} />
+                  <Typography variant="h5" fontWeight={900} color="#0f172a">No proofs to review</Typography>
+                  <Typography color="text.secondary" mt={1}>Volunteers will submit their proofs here upon completion.</Typography>
+                </Paper>
+              ) : (
+                <Grid container spacing={3}>
+                  {pendingParticipations.map(p => (
+                    <Grid item xs={12} md={6} lg={4} key={p._id}>
+                      <Card elevation={0} sx={{ borderRadius: 4, border: '1px solid #e2e8f0', display: 'flex', flexDirection: 'column', height: '100%' }}>
+                        <CardContent sx={{ flexGrow: 1, p: 3 }}>
+                          <Stack direction="row" justifyContent="space-between" mb={2}>
+                            <Typography variant="caption" color="text.secondary" fontWeight={700}>
+                              {formatDistanceToNow(new Date(p.submittedAt), { addSuffix: true })}
+                            </Typography>
+                            <Chip label={p.program?.title} size="small" sx={{ fontWeight: 800, bgcolor: '#f0fdf4', color: '#16a34a' }} />
+                          </Stack>
+                          
+                          <Stack direction="row" spacing={1.5} alignItems="center" mb={2}>
+                            <Avatar sx={{ bgcolor: '#eff6ff', color: '#3b82f6' }}>{p.resident?.name?.charAt(0)}</Avatar>
+                            <Box>
+                              <Typography fontWeight={800}>{p.resident?.name}</Typography>
+                              <Typography variant="caption" color="text.secondary">{p.resident?.email}</Typography>
+                            </Box>
+                          </Stack>
+
+                          <Typography variant="body2" sx={{ bgcolor: '#f8fafc', p: 2, borderRadius: 2, border: '1px solid #f1f5f9', whiteSpace: 'pre-wrap' }}>
+                            "{p.proof}"
+                          </Typography>
+                          <Typography variant="caption" display="block" mt={2} fontWeight={700} color="#f59e0b">
+                            Reward: {p.program?.rewardCoins || 100} Coins upon approval
+                          </Typography>
+                        </CardContent>
+                        <CardActions sx={{ p: 3, pt: 0, gap: 1 }}>
+                          <Button fullWidth variant="contained" 
+                            disabled={!!acting}
+                            onClick={() => handleApproveParticipation(p._id)}
+                            sx={{ bgcolor: '#16a34a', '&:hover': { bgcolor: '#15803d' }, fontWeight: 800, borderRadius: 2 }}>
+                            {acting === `proof-${p._id}` ? 'Approving...' : 'Approve & Reward'}
+                          </Button>
+                          <Button fullWidth variant="outlined" color="error"
+                            disabled={!!acting}
+                            onClick={() => handleRejectParticipation(p._id)}
+                            sx={{ fontWeight: 800, borderRadius: 2 }}>
+                            Reject
+                          </Button>
+                        </CardActions>
+                      </Card>
+                    </Grid>
+                  ))}
+                </Grid>
               )}
             </>
           )}
@@ -687,49 +813,135 @@ const ManagePrograms = () => {
         <DialogContent sx={{ pt: 1 }}>
           {reviewDialog.prog && (
             <>
-              {reviewDialog.prog.volunteers.filter(v => v.status === 'pending').length > 1 && (
-                <Button fullWidth variant="contained" startIcon={<DoneAll />}
-                  disabled={!!acting}
-                  onClick={() => handleBulkApprove(reviewDialog.prog._id)}
-                  sx={{ mb: 2, fontWeight: 800, borderRadius: 2, bgcolor: '#16a34a' }}>
-                  {acting === `bulk-${reviewDialog.prog._id}` ? 'Approving all…' : `Approve All ${reviewDialog.prog.volunteers.filter(v => v.status === 'pending').length} Pending`}
+              {/* Tab switcher for Dialog */}
+              <Stack direction="row" spacing={1} mb={3}>
+                <Button 
+                  size="small"
+                  variant={reviewDialog.activeTab === 0 ? 'contained' : 'outlined'}
+                  onClick={() => setReviewDialog(prev => ({ ...prev, activeTab: 0 }))}
+                  sx={{ borderRadius: 2, fontWeight: 800 }}>
+                  Pending ({reviewDialog.prog.volunteers.filter(v => v.status === 'pending').length})
                 </Button>
-              )}
-              <Stack spacing={1.5}>
-                {reviewDialog.prog.volunteers.filter(v => v.status === 'pending').map(v => (
-                  <Stack key={v._id} direction="row" justifyContent="space-between" alignItems="center"
-                    sx={{ p: 2, bgcolor: '#f8fafc', borderRadius: 3 }}>
-                    <Stack direction="row" spacing={1.5} alignItems="center">
-                      <Avatar sx={{ bgcolor: '#eff6ff', color: '#3b82f6', width: 36, height: 36 }}>
-                        {v.user?.name?.charAt(0)}
-                      </Avatar>
-                      <Box>
-                        <Typography variant="body2" fontWeight={700}>{v.user?.name}</Typography>
-                        <Typography variant="caption" color="text.secondary">
-                          Zone {v.user?.address?.zone?.toUpperCase() || '?'} · {v.user?.coins || 0} coins
-                        </Typography>
-                      </Box>
-                    </Stack>
-                    <Stack direction="row" spacing={1}>
-                      <Button size="small" variant="contained"
-                        disabled={!!acting}
-                        onClick={() => handleApprove(reviewDialog.prog._id, v.user?._id)}
-                        sx={{ borderRadius: 2, fontWeight: 800, bgcolor: '#16a34a', minWidth: 90 }}>
-                        Approve
-                      </Button>
-                      <Button size="small" variant="outlined" color="error"
-                        disabled={!!acting}
-                        onClick={() => handleReject(reviewDialog.prog._id, v.user?._id)}
-                        sx={{ borderRadius: 2, fontWeight: 700 }}>
-                        Reject
-                      </Button>
-                    </Stack>
-                  </Stack>
-                ))}
-                {reviewDialog.prog.volunteers.filter(v => v.status === 'pending').length === 0 && (
-                  <Alert severity="success" sx={{ borderRadius: 2 }}>All applications have been reviewed!</Alert>
-                )}
+                <Button 
+                  size="small"
+                  variant={reviewDialog.activeTab === 1 ? 'contained' : 'outlined'}
+                  onClick={() => setReviewDialog(prev => ({ ...prev, activeTab: 1 }))}
+                  sx={{ borderRadius: 2, fontWeight: 800 }}>
+                  Approved ({reviewDialog.prog.volunteers.filter(v => v.status === 'approved').length})
+                </Button>
+                <Button 
+                  size="small"
+                  variant={reviewDialog.activeTab === 2 ? 'contained' : 'outlined'}
+                  onClick={() => setReviewDialog(prev => ({ ...prev, activeTab: 2 }))}
+                  sx={{ borderRadius: 2, fontWeight: 800 }}>
+                  Completed ({reviewDialog.prog.volunteers.filter(v => v.status === 'completed').length})
+                </Button>
               </Stack>
+
+              {/* PENDING TAB */}
+              {reviewDialog.activeTab === 0 && (
+                <>
+                  {reviewDialog.prog.volunteers.filter(v => v.status === 'pending').length > 1 && (
+                    <Button fullWidth variant="contained" startIcon={<DoneAll />}
+                      disabled={!!acting}
+                      onClick={() => handleBulkApprove(reviewDialog.prog._id)}
+                      sx={{ mb: 2, fontWeight: 800, borderRadius: 2, bgcolor: '#16a34a' }}>
+                      {acting === `bulk-${reviewDialog.prog._id}` ? 'Approving all…' : `Approve All ${reviewDialog.prog.volunteers.filter(v => v.status === 'pending').length} Pending`}
+                    </Button>
+                  )}
+                  <Stack spacing={1.5}>
+                    {reviewDialog.prog.volunteers.filter(v => v.status === 'pending').map(v => (
+                      <Stack key={v._id} direction="row" justifyContent="space-between" alignItems="center"
+                        sx={{ p: 2, bgcolor: '#f8fafc', borderRadius: 3 }}>
+                        <Stack direction="row" spacing={1.5} alignItems="center">
+                          <Avatar sx={{ bgcolor: '#eff6ff', color: '#3b82f6', width: 36, height: 36 }}>
+                            {v.user?.name?.charAt(0)}
+                          </Avatar>
+                          <Box>
+                            <Typography variant="body2" fontWeight={700}>{v.user?.name}</Typography>
+                            <Typography variant="caption" color="text.secondary">
+                              Zone {v.user?.address?.zone?.toUpperCase() || '?'} · {v.user?.coins || 0} coins
+                            </Typography>
+                          </Box>
+                        </Stack>
+                        <Stack direction="row" spacing={1}>
+                          <Button size="small" variant="contained"
+                            disabled={!!acting}
+                            onClick={() => handleApprove(reviewDialog.prog._id, v.user?._id)}
+                            sx={{ borderRadius: 2, fontWeight: 800, bgcolor: '#16a34a', minWidth: 90 }}>
+                            Approve
+                          </Button>
+                          <Button size="small" variant="outlined" color="error"
+                            disabled={!!acting}
+                            onClick={() => handleReject(reviewDialog.prog._id, v.user?._id)}
+                            sx={{ borderRadius: 2, fontWeight: 700 }}>
+                            Reject
+                          </Button>
+                        </Stack>
+                      </Stack>
+                    ))}
+                    {reviewDialog.prog.volunteers.filter(v => v.status === 'pending').length === 0 && (
+                      <Alert severity="success" sx={{ borderRadius: 2 }}>No pending applications</Alert>
+                    )}
+                  </Stack>
+                </>
+              )}
+
+              {/* APPROVED TAB */}
+              {reviewDialog.activeTab === 1 && (
+                <Stack spacing={1.5}>
+                  {reviewDialog.prog.volunteers.filter(v => v.status === 'approved').map(v => (
+                    <Stack key={v._id} direction="row" justifyContent="space-between" alignItems="center"
+                      sx={{ p: 2, bgcolor: '#f0fdf4', borderRadius: 3 }}>
+                      <Stack direction="row" spacing={1.5} alignItems="center">
+                        <Avatar sx={{ bgcolor: '#dcfce7', color: '#16a34a', width: 36, height: 36 }}>
+                          {v.user?.name?.charAt(0)}
+                        </Avatar>
+                        <Box>
+                          <Typography variant="body2" fontWeight={700}>{v.user?.name}</Typography>
+                          <Typography variant="caption" color="text.secondary">
+                            Approved {formatDistanceToNow(new Date(v.approvedAt), { addSuffix: true })}
+                          </Typography>
+                        </Box>
+                      </Stack>
+                      <Typography variant="caption" sx={{ fontStyle: 'italic', color: 'text.secondary' }}>
+                        Waiting for proof submission...
+                      </Typography>
+                    </Stack>
+                  ))}
+                  {reviewDialog.prog.volunteers.filter(v => v.status === 'approved').length === 0 && (
+                    <Typography variant="body2" color="text.secondary" textAlign="center" py={2}>
+                      No approved volunteers waiting for completion.
+                    </Typography>
+                  )}
+                </Stack>
+              )}
+
+              {/* COMPLETED TAB */}
+              {reviewDialog.activeTab === 2 && (
+                <Stack spacing={1.5}>
+                  {reviewDialog.prog.volunteers.filter(v => v.status === 'completed').map(v => (
+                    <Stack key={v._id} direction="row" justifyContent="space-between" alignItems="center"
+                      sx={{ p: 2, bgcolor: '#f8fafc', borderRadius: 3 }}>
+                      <Stack direction="row" spacing={1.5} alignItems="center">
+                        <Avatar sx={{ bgcolor: '#e2e8f0', color: '#475569', width: 36, height: 36 }}>
+                          {v.user?.name?.charAt(0)}
+                        </Avatar>
+                        <Box>
+                          <Typography variant="body2" fontWeight={700}>{v.user?.name}</Typography>
+                          <Typography variant="caption" color="text.secondary">
+                            Completed on {v.completedAt ? format(new Date(v.completedAt), 'MMM dd') : '?'}
+                          </Typography>
+                        </Box>
+                      </Stack>
+                      <Chip icon={<EmojiEvents sx={{ fontSize: '1rem !important' }} />} label="+100 Coins" size="small" sx={{ fontWeight: 800, color: '#f59e0b', bgcolor: '#fef3c7' }} />
+                    </Stack>
+                  ))}
+                  {reviewDialog.prog.volunteers.filter(v => v.status === 'completed').length === 0 && (
+                    <Typography color="text.secondary" textAlign="center" py={2}>No completed volunteers yet</Typography>
+                  )}
+                </Stack>
+              )}
             </>
           )}
         </DialogContent>

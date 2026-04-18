@@ -125,7 +125,7 @@ const programSchema = new mongoose.Schema({
     },
     status: { 
       type: String, 
-      enum: ['pending', 'approved', 'rejected'], 
+      enum: ['pending', 'approved', 'rejected', 'completed'], 
       default: 'pending' 
     },
     appliedAt: { 
@@ -133,7 +133,8 @@ const programSchema = new mongoose.Schema({
       default: Date.now 
     },
     approvedAt: Date,
-    rejectedAt: Date
+    rejectedAt: Date,
+    completedAt: Date
   }],
   requirements: [String],
   benefits: [String],
@@ -150,10 +151,10 @@ const programSchema = new mongoose.Schema({
   images: [String]
 }, { timestamps: true });
 
-// Update currentVolunteers count when volunteers are approved
+// Update currentVolunteers count when volunteers are approved or completed
 programSchema.pre('save', function(next) {
   if (this.volunteers) {
-    this.currentVolunteers = this.volunteers.filter(v => v.status === 'approved').length;
+    this.currentVolunteers = this.volunteers.filter(v => ['approved', 'completed'].includes(v.status)).length;
   }
   
   // Update status based on dates
