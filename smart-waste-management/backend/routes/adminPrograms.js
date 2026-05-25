@@ -513,7 +513,7 @@ router.put('/:id/volunteers/bulk-approve', protect, authorize('admin'), async (r
 // ============================================================
 router.get('/participations/pending', protect, authorize('admin'), async (req, res) => {
   try {
-    const participations = await Participation.find()
+    const participations = await Participation.find({ reviewStatus: 'pending' })
       .populate('resident', 'name email address')
       .populate('program', 'title rewardCoins organization')
       .sort({ submittedAt: -1 });
@@ -525,89 +525,84 @@ router.get('/participations/pending', protect, authorize('admin'), async (req, r
 });
 
 // ============================================================
-// @desc    REVIEW (Approve) a participation proof -> Awards coins
-// @route   PUT /api/admin/programs/participations/:id/approve
+// @desc    REVIEW a task completion form submission
+// @route   PUT /api/admin/programs/participations/:id/review
 // @access  Private/Admin
 // ============================================================
-router.put('/participations/:id/approve', protect, authorize('admin'), async (req, res) => {
+router.put('/participations/:id/review', protect, authorize('admin'), async (req, res) => {
   try {
+    const { reviewStatus, adminRemarks } = req.body;
+    
+    if (!['approved', 'rejected'].includes(reviewStatus)) {
+      return res.status(400).json({ success: false, message: 'Invalid review status' });
+    }
+
     const participation = await Participation.findById(req.params.id)
       .populate('program')
       .populate('resident');
 
     if (!participation) return res.status(404).json({ success: false, message: 'Participation not found' });
-    if (participation.status === 'approved') return res.status(400).json({ success: false, message: 'Already approved' });
+    if (participation.reviewStatus !== 'pending') {
+      return res.status(400).json({ success: false, message: 'Only pending submissions can be reviewed' });
+    }
 
-    participation.status = 'approved';
+    participation.reviewStatus = reviewStatus;
+    participation.adminRemarks = adminRemarks;
     participation.reviewedAt = new Date();
-    await participation.save();
 
     const program = participation.program;
     const resident = participation.resident;
+    
+    let coinsEarned = 0;
+    let milestoneHit = false;
 
-    // Update volunteer status to completed in the Program model
-    const volunteer = program.volunteers.find(v => v.user.toString() === resident._id.toString());
-    if (volunteer) {
-      volunteer.status = 'completed';
-      volunteer.completedAt = new Date();
-      program.markModified('volunteers');
-      await program.save();
+    if (reviewStatus === 'approved') {
+      // Update volunteer status to completed in the Program model
+      const volunteer = program.volunteers.find(v => v.user.toString() === resident._id.toString());
+      if (volunteer) {
+        volunteer.status = 'completed';
+        volunteer.completedAt = new Date();
+        program.markModified('volunteers');
+        await program.save();
+      }
+
+      if (participation.taskCompletedStatus === 'completed') {
+        participation.coinsAwarded = true;
+        coinsEarned = 100; // As per the requirement: "Add 100 coins"
+        
+        const prevCoins = resident.coins || 0;
+        await resident.addCoins(coinsEarned, { type: 'volunteer', programId: program._id });
+        await resident.save();
+        
+        milestoneHit = prevCoins < 1000 && resident.coins < 1000 && resident.freeServiceMonths > 0; // Check if 1000 coins threshold was hit and reset
+
+        await Transaction.create({
+          user: resident._id,
+          type: 'coin_earned',
+          amount: coinsEarned,
+          description: `Task completed verified: ${program.title}`,
+          reference: { programId: program._id },
+          balance: resident.coins,
+          status: 'completed',
+        });
+
+        const rewardMsg = milestoneHit 
+          ? `Task verified! You earned ${coinsEarned} coins. 🎉 You've reached 1,000 coins and unlocked 1 month of FREE service!`
+          : `Task verified! You earned ${coinsEarned} Eco-Coins for finishing "${program.title}".`;
+        await notifyResident(resident._id, req.user._id, 'reward', '🏆 Task Completed!', rewardMsg, { programId: program._id });
+      } else {
+        await notifyResident(resident._id, req.user._id, 'system_alert', 'Task Verified', `Your submission for "${program.title}" was approved but the task was not fully completed.`, { programId: program._id });
+      }
+    } else {
+      await notifyResident(resident._id, req.user._id, 'system_alert', 
+        'Task Completion Not Verified',
+        adminRemarks ? `Your submission for "${program.title}" was rejected. Remarks: ${adminRemarks}` : `Your submission for "${program.title}" was rejected.`
+      );
     }
 
-    // Award coins using User.addCoins()
-    const coinsToAward = program.rewardCoins || 100;
-    const prevTotal = resident.totalCoinsEarned || 0;
-    await resident.addCoins(coinsToAward, { type: 'volunteer', programId: program._id });
-    await resident.save();
-    const newTotal = resident.totalCoinsEarned || 0;
-    const milestoneHit = prevTotal < 1000 && newTotal >= 1000;
-
-    await Transaction.create({
-      user: resident._id,
-      type: 'coin_earned',
-      amount: coinsToAward,
-      description: `Program proof verified: ${program.title}`,
-      reference: { programId: program._id },
-      balance: resident.coins,
-      status: 'completed',
-    });
-
-    const rewardMsg = milestoneHit
-      ? `Proof verified! You earned ${coinsToAward} coins. 🎉 You've reached 1,000 coins and unlocked 1 month of FREE service!`
-      : `Proof verified! You earned ${coinsToAward} Eco-Coins for finishing "${program.title}".`;
-
-    await notifyResident(resident._id, req.user._id, 'reward', '🏆 Program Completed!', rewardMsg, { programId: program._id });
-
-    res.json({ success: true, message: 'Participation approved and coins awarded', coinsAwarded: coinsToAward, milestoneHit });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
-});
-
-// ============================================================
-// @desc    REVIEW (Reject) a participation proof
-// @route   PUT /api/admin/programs/participations/:id/reject
-// @access  Private/Admin
-// ============================================================
-router.put('/participations/:id/reject', protect, authorize('admin'), async (req, res) => {
-  try {
-    const { reason } = req.body;
-    const participation = await Participation.findById(req.params.id)
-      .populate('program', 'title');
-
-    if (!participation) return res.status(404).json({ success: false, message: 'Participation not found' });
-    if (participation.status !== 'pending') return res.status(400).json({ success: false, message: 'Can only reject pending participations' });
-
-    participation.status = 'rejected';
-    participation.reviewedAt = new Date();
     await participation.save();
 
-    await notifyResident(participation.resident, req.user._id, 'system_alert', 
-      'Participation Proof Not Verified',
-      reason ? `Your proof for "${participation.program.title}" was not verified. Reason: ${reason}` : `Your proof for "${participation.program.title}" was not verified.`
-    );
-
-    res.json({ success: true, message: 'Participation proof rejected' });
+    res.json({ success: true, message: `Task completion ${reviewStatus}`, coinsAwarded: coinsEarned, milestoneHit });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }

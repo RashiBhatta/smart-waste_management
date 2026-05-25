@@ -6,10 +6,11 @@
 
 const express = require('express');
 const router = express.Router();
-const Program      = require('../models/Program');
-const User         = require('../models/User');
+const Program = require('../models/Program');
+const User = require('../models/User');
 const VolunteerRequest = require('../models/VolunteerRequest');
 const Participation = require('../models/Participation');
+const Notification = require('../models/Notification');
 const { protect, authorize } = require('../middleware/auth');
 
 // ============================================================
@@ -34,18 +35,18 @@ router.get('/', protect, async (req, res) => {
       const myRecord = prog.volunteers.find(
         (v) => v.user && v.user.toString() === currentUserId
       );
-      
-      const myParticipation = participations.find(p => p.program.toString() === prog._id.toString());
+
+      const myParticipation = participations.find(p => p.program && p.program.toString() === prog._id.toString());
 
       return {
         ...obj,
-        hasJoined:       !!myRecord,
+        hasJoined: !!myRecord,
         volunteerStatus: myRecord ? myRecord.status : null,   // 'pending' | 'approved' | 'rejected' | 'completed'
-        participationStatus: myParticipation ? myParticipation.status : null,
-        spotsLeft:       prog.maxVolunteers - prog.currentVolunteers,
-        isFull:          prog.currentVolunteers >= prog.maxVolunteers,
+        participationStatus: myParticipation ? myParticipation.reviewStatus : null,
+        spotsLeft: prog.maxVolunteers - prog.currentVolunteers,
+        isFull: prog.currentVolunteers >= prog.maxVolunteers,
         // Strip full volunteer list — residents don't need other applicants' info
-        volunteers:      undefined,
+        volunteers: undefined,
       };
     });
 
@@ -82,15 +83,15 @@ router.get('/:id', protect, async (req, res) => {
       success: true,
       program: {
         ...obj,
-        hasJoined:       !!myRecord,
+        hasJoined: !!myRecord,
         volunteerStatus: myRecord ? myRecord.status : null,
-        participationStatus: myParticipation ? myParticipation.status : null,
-        appliedAt:       myRecord ? myRecord.appliedAt : null,
-        approvedAt:      myRecord ? myRecord.approvedAt : null,
-        spotsLeft:       program.maxVolunteers - program.currentVolunteers,
-        isFull:          program.currentVolunteers >= program.maxVolunteers,
+        participationStatus: myParticipation ? myParticipation.reviewStatus : null,
+        appliedAt: myRecord ? myRecord.appliedAt : null,
+        approvedAt: myRecord ? myRecord.approvedAt : null,
+        spotsLeft: program.maxVolunteers - program.currentVolunteers,
+        isFull: program.currentVolunteers >= program.maxVolunteers,
         // Hide other applicant details from residents
-        volunteers:      undefined,
+        volunteers: undefined,
       },
     });
   } catch (err) {
@@ -138,8 +139,8 @@ router.post('/:id/join', protect, authorize('resident'), async (req, res) => {
 
     // ── 1. Add volunteer record ──────────────────────────────
     program.volunteers.push({
-      user:      req.user._id,
-      status:    'pending',
+      user: req.user._id,
+      status: 'pending',
       appliedAt: new Date(),
     });
     await program.save();
@@ -147,11 +148,11 @@ router.post('/:id/join', protect, authorize('resident'), async (req, res) => {
     // ── 2. Log VolunteerRequest (for admin workflow) ──────────
     try {
       await VolunteerRequest.create({
-        userId:        req.user._id,
-        programId:     program._id,
-        programName:   program.title,
-        status:        'pending',
-        coinsToAward:  program.rewardCoins || 100,
+        userId: req.user._id,
+        programId: program._id,
+        programName: program.title,
+        status: 'pending',
+        coinsToAward: program.rewardCoins || 100,
       });
     } catch (e) {
       console.warn('VolunteerRequest log failed (non-critical):', e.message);
@@ -164,15 +165,15 @@ router.post('/:id/join', protect, authorize('resident'), async (req, res) => {
       await Notification.insertMany(
         admins.map((admin) => ({
           recipient: admin._id,
-          sender:    req.user._id,
-          type:      'volunteer_request',
-          title:     'New Volunteer Application',
-          message:   `${req.user.name} applied to join "${program.title}"`,
+          sender: req.user._id,
+          type: 'volunteer_request',
+          title: 'New Volunteer Application',
+          message: `${req.user.name} applied to join "${program.title}"`,
           data: {
-            programId:    program._id,
+            programId: program._id,
             programTitle: program.title,
-            userId:       req.user._id,
-            userName:     req.user.name,
+            userId: req.user._id,
+            userName: req.user.name,
           },
           read: false,
         }))
@@ -183,11 +184,11 @@ router.post('/:id/join', protect, authorize('resident'), async (req, res) => {
     const io = req.app.get('io');
     if (io) {
       io.to('admins').emit('newVolunteerApplication', {
-        programId:    program._id,
+        programId: program._id,
         programTitle: program.title,
-        userId:       req.user._id,
-        userName:     req.user.name,
-        appliedAt:    new Date(),
+        userId: req.user._id,
+        userName: req.user.name,
+        appliedAt: new Date(),
       });
     }
 
@@ -219,21 +220,21 @@ router.get('/my/applications', protect, authorize('resident'), async (req, res) 
       const myRecord = prog.volunteers.find(
         (v) => v.user.toString() === req.user._id.toString()
       );
-      const myParticipation = participations.find(p => p.program.toString() === prog._id.toString());
+      const myParticipation = participations.find(p => p.program && p.program.toString() === prog._id.toString());
       return {
-        _id:               prog._id,
-        title:             prog.title,
-        organization:      prog.organization,
-        zone:              prog.zone,
-        programStatus:     prog.status,
-        startDate:         prog.startDate,
-        endDate:           prog.endDate,
-        description:       prog.description,
-        rewardCoins:       prog.rewardCoins || 100,
+        _id: prog._id,
+        title: prog.title,
+        organization: prog.organization,
+        zone: prog.zone,
+        programStatus: prog.status,
+        startDate: prog.startDate,
+        endDate: prog.endDate,
+        description: prog.description,
+        rewardCoins: prog.rewardCoins || 100,
         applicationStatus: myRecord?.status,       // 'pending' | 'approved' | 'rejected' | 'completed'
-        participationStatus: myParticipation?.status,
-        appliedAt:         myRecord?.appliedAt,
-        approvedAt:        myRecord?.approvedAt,
+        participationStatus: myParticipation?.reviewStatus,
+        appliedAt: myRecord?.appliedAt,
+        approvedAt: myRecord?.approvedAt,
       };
     });
 
@@ -244,15 +245,40 @@ router.get('/my/applications', protect, authorize('resident'), async (req, res) 
 });
 
 // ============================================================
-// @desc    SUBMIT participation proof for a program
+// @desc    SUBMIT task completion form for a program
 // @route   POST /api/programs/:id/participate
 // @access  Private/Resident
 // ============================================================
 router.post('/:id/participate', protect, authorize('resident'), async (req, res) => {
   try {
-    const { proof } = req.body;
-    if (!proof?.trim()) {
-      return res.status(400).json({ success: false, message: 'Proof description is required' });
+    const { taskCompletedStatus, taskDescription, completionDate, proofImageUrl } = req.body;
+
+    // Validate all required fields
+    if (!taskCompletedStatus || typeof taskCompletedStatus !== 'string') {
+      return res.status(400).json({ success: false, message: 'Task status is required and must be valid' });
+    }
+    if (!taskDescription || typeof taskDescription !== 'string' || !taskDescription.trim()) {
+      return res.status(400).json({ success: false, message: 'Task description is required' });
+    }
+    if (!completionDate) {
+      return res.status(400).json({ success: false, message: 'Completion date is required' });
+    }
+
+    // Parse completion date - handle both ISO string and YYYY-MM-DD format
+    let completionDateObj;
+    try {
+      // If it's in YYYY-MM-DD format, parse it explicitly to avoid timezone issues
+      if (typeof completionDate === 'string' && completionDate.match(/^\d{4}-\d{2}-\d{2}$/)) {
+        const [year, month, day] = completionDate.split('-');
+        completionDateObj = new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
+      } else {
+        completionDateObj = new Date(completionDate);
+      }
+      if (isNaN(completionDateObj.getTime())) {
+        throw new Error('Invalid date');
+      }
+    } catch (e) {
+      return res.status(400).json({ success: false, message: 'Invalid completion date format' });
     }
 
     const program = await Program.findById(req.params.id);
@@ -261,45 +287,51 @@ router.post('/:id/participate', protect, authorize('resident'), async (req, res)
     // Validate that the user is an approved volunteer
     const volunteerRec = program.volunteers.find(v => v.user.toString() === req.user._id.toString());
     if (!volunteerRec || volunteerRec.status !== 'approved') {
-      return res.status(403).json({ success: false, message: 'You must be an approved volunteer to submit proof.' });
+      return res.status(403).json({ success: false, message: 'You must be an approved volunteer to submit task completion.' });
     }
 
     // Check if a pending or approved participation already exists
     const existing = await Participation.findOne({ resident: req.user._id, program: program._id });
     if (existing) {
-      if (existing.status === 'approved') return res.status(400).json({ success: false, message: 'Already marked as completed' });
-      if (existing.status === 'pending') return res.status(400).json({ success: false, message: 'Submission already pending review' });
+      if (existing.reviewStatus === 'approved') return res.status(400).json({ success: false, message: 'Already marked as completed' });
+      if (existing.reviewStatus === 'pending') return res.status(400).json({ success: false, message: 'Submission already pending review' });
     }
 
     // Save participation
-    if (existing && existing.status === 'rejected') {
+    if (existing && existing.reviewStatus === 'rejected') {
       // Allow resubmission
-      existing.status = 'pending';
-      existing.proof = proof;
+      existing.reviewStatus = 'pending';
+      existing.taskCompletedStatus = taskCompletedStatus;
+      existing.taskDescription = taskDescription.trim();
+      existing.completionDate = completionDateObj;
+      existing.proofImageUrl = proofImageUrl || '';
       existing.submittedAt = new Date();
       await existing.save();
     } else {
       await Participation.create({
         resident: req.user._id,
         program: program._id,
-        proof,
+        taskCompletedStatus,
+        taskDescription: taskDescription.trim(),
+        completionDate: completionDateObj,
+        proofImageUrl: proofImageUrl || '',
       });
     }
 
     // Notify admins
     const io = req.app.get('io');
     if (io) {
-      io.to('admins').emit('newParticipationProof', {
+      io.to('admins').emit('newTaskCompletion', {
         programId: program._id,
         userId: req.user._id,
         userName: req.user.name
       });
     }
 
-    res.json({ success: true, message: 'Participation submitted for review.' });
+    res.json({ success: true, message: 'Task completion form submitted for review.' });
   } catch (err) {
     console.error('Submit participation error:', err);
-    res.status(500).json({ success: false, message: 'Server error' });
+    res.status(500).json({ success: false, message: err.message || 'Failed to submit task completion form' });
   }
 });
 

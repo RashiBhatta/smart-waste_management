@@ -180,6 +180,10 @@ const ManagePrograms = () => {
   // Volunteer review dialog (single program)
   const [reviewDialog, setReviewDialog] = useState({ open: false, prog: null, activeTab: 0 });
 
+  // Task Completion Review Dialog
+  const [taskReviewDialog, setTaskReviewDialog] = useState({ open: false, participation: null, reviewStatus: '' });
+  const [adminRemarks, setAdminRemarks] = useState('');
+
   // Action in progress
   const [acting, setActing] = useState(null); // `${programId}-${userId}`
 
@@ -201,15 +205,15 @@ const ManagePrograms = () => {
 
   useEffect(() => { fetchPrograms(); }, [fetchPrograms]);
 
-  // Socket: new application or new proof
+  // Socket: new application or new task completion
   useEffect(() => {
     if (!socket) return;
     const refresh = () => fetchPrograms();
     socket.on('newVolunteerApplication', refresh);
-    socket.on('newParticipationProof', refresh);
+    socket.on('newTaskCompletion', refresh);
     return () => {
       socket.off('newVolunteerApplication', refresh);
-      socket.off('newParticipationProof', refresh);
+      socket.off('newTaskCompletion', refresh);
     }
   }, [socket, fetchPrograms]);
 
@@ -366,31 +370,26 @@ const ManagePrograms = () => {
     } finally { setActing(null); }
   };
 
-  // ── Approve participation proof ───────────────────────────
-  const handleApproveParticipation = async (id) => {
+  // ── Review task completion ───────────────────────────
+  const handleReviewParticipation = async () => {
     try {
-      setActing(`proof-${id}`);
-      const res = await api.put(`/admin/programs/participations/${id}/approve`);
+      setSubmitting(true);
+      const { participation, reviewStatus } = taskReviewDialog;
+      const res = await api.put(`/admin/programs/participations/${participation._id}/review`, {
+        reviewStatus,
+        adminRemarks
+      });
       toast.success(res.data.message);
+      setTaskReviewDialog({ open: false, participation: null, reviewStatus: '' });
+      setAdminRemarks('');
       fetchPrograms();
     } catch (err) {
-      toast.error(err.response?.data?.message || 'Approval failed');
-    } finally { setActing(null); }
-  };
-
-  const handleRejectParticipation = async (id) => {
-    try {
-      setActing(`proof-${id}`);
-      await api.put(`/admin/programs/participations/${id}/reject`, { reason: 'Proof insufficient or invalid' });
-      toast.success('Participation proof rejected');
-      fetchPrograms();
-    } catch (err) {
-      toast.error(err.response?.data?.message || 'Rejection failed');
-    } finally { setActing(null); }
+      toast.error(err.response?.data?.message || 'Review failed');
+    } finally { setSubmitting(false); }
   };
 
   const totalPending = pendingQueue.length;
-  const pendingParticipations = participations.filter(p => p.status === 'pending');
+  const pendingParticipations = participations.filter(p => p.reviewStatus === 'pending');
 
   // ── Sidebar ───────────────────────────────────────────────
   const navItems = [
@@ -505,7 +504,7 @@ const ManagePrograms = () => {
                   bgcolor: activeTab === 2 ? '#8b5cf6' : 'white',
                   color:   activeTab === 2 ? 'white' : '#0f172a',
                   borderColor: '#e2e8f0' }}>
-                Proof Reviews
+                Task Reviews
               </Button>
             </Badge>
           </Stack>
@@ -591,12 +590,12 @@ const ManagePrograms = () => {
                                   label={`+${item.rewardCoins} coins`} size="small"
                                   sx={{ fontWeight: 700, bgcolor: '#fef9c3', color: '#a16207' }} />
                               </Stack>
-                              <Typography variant="caption" color="text.disabled" display="block" mt={0.5}>
-                                Applied {formatDistanceToNow(new Date(item.appliedAt), { addSuffix: true })}
-                                {' · '}{item.userCoins} coins currently
-                              </Typography>
-                            </Box>
-                          </Stack>
+                                <Typography variant="caption" color="text.disabled" display="block" mt={0.5}>
+                                  Applied {formatDistanceToNow(new Date(item.appliedAt), { addSuffix: true })}
+                                  {' · '}{item.userCoins} coins currently
+                                </Typography>
+                              </Box>
+                            </Stack>
 
                           <Stack direction="row" spacing={1} flexShrink={0}>
                             <Button
@@ -626,14 +625,14 @@ const ManagePrograms = () => {
             </>
           )}
 
-          {/* ── TAB 2: PARTICIPATION PROOFS ── */}
+          {/* ── TAB 2: TASK COMPLETION REVIEWS ── */}
           {activeTab === 2 && (
             <>
               {pendingParticipations.length === 0 ? (
                 <Paper elevation={0} sx={{ p: 8, textAlign: 'center', borderRadius: 4, border: '2px dashed #e2e8f0' }}>
                   <TaskAlt sx={{ fontSize: 72, color: '#e2e8f0', mb: 2 }} />
-                  <Typography variant="h5" fontWeight={900} color="#0f172a">No proofs to review</Typography>
-                  <Typography color="text.secondary" mt={1}>Volunteers will submit their proofs here upon completion.</Typography>
+                  <Typography variant="h5" fontWeight={900} color="#0f172a">No tasks to review</Typography>
+                  <Typography color="text.secondary" mt={1}>Volunteers will submit their task completion forms here.</Typography>
                 </Paper>
               ) : (
                 <Grid container spacing={3}>
@@ -645,34 +644,49 @@ const ManagePrograms = () => {
                             <Typography variant="caption" color="text.secondary" fontWeight={700}>
                               {formatDistanceToNow(new Date(p.submittedAt), { addSuffix: true })}
                             </Typography>
-                            <Chip label={p.program?.title} size="small" sx={{ fontWeight: 800, bgcolor: '#f0fdf4', color: '#16a34a' }} />
+                            <Chip label={p.volunteerProgramId?.title || p.program?.title} size="small" sx={{ fontWeight: 800, bgcolor: '#f0fdf4', color: '#16a34a' }} />
                           </Stack>
                           
                           <Stack direction="row" spacing={1.5} alignItems="center" mb={2}>
-                            <Avatar sx={{ bgcolor: '#eff6ff', color: '#3b82f6' }}>{p.resident?.name?.charAt(0)}</Avatar>
+                            <Avatar sx={{ bgcolor: '#eff6ff', color: '#3b82f6' }}>{p.residentId?.name?.charAt(0) || p.resident?.name?.charAt(0)}</Avatar>
                             <Box>
-                              <Typography fontWeight={800}>{p.resident?.name}</Typography>
-                              <Typography variant="caption" color="text.secondary">{p.resident?.email}</Typography>
+                              <Typography fontWeight={800}>{p.residentId?.name || p.resident?.name}</Typography>
+                              <Typography variant="caption" color="text.secondary">{p.residentId?.email || p.resident?.email}</Typography>
                             </Box>
                           </Stack>
 
                           <Typography variant="body2" sx={{ bgcolor: '#f8fafc', p: 2, borderRadius: 2, border: '1px solid #f1f5f9', whiteSpace: 'pre-wrap' }}>
-                            "{p.proof}"
+                            "{p.taskDescription || p.proof}"
                           </Typography>
+                          
+                          <Stack spacing={0.5} mt={2}>
+                            <Typography variant="caption" display="block">
+                              Task Status: <strong>{p.taskCompletedStatus === 'completed' ? 'Completed' : 'Not Completed'}</strong>
+                            </Typography>
+                            <Typography variant="caption" display="block">
+                              Completion Date: {p.completionDate ? format(new Date(p.completionDate), 'MMM dd, yyyy') : 'N/A'}
+                            </Typography>
+                            {p.proofImageUrl && (
+                              <Typography variant="caption" display="block" sx={{ '& a': { color: '#3b82f6', fontWeight: 600, textDecoration: 'none' } }}>
+                                <a href={p.proofImageUrl} target="_blank" rel="noreferrer">🔗 View Image Proof</a>
+                              </Typography>
+                            )}
+                          </Stack>
+
                           <Typography variant="caption" display="block" mt={2} fontWeight={700} color="#f59e0b">
-                            Reward: {p.program?.rewardCoins || 100} Coins upon approval
+                            Reward: {p.volunteerProgramId?.rewardCoins || p.program?.rewardCoins || 100} Coins upon approval
                           </Typography>
                         </CardContent>
                         <CardActions sx={{ p: 3, pt: 0, gap: 1 }}>
                           <Button fullWidth variant="contained" 
                             disabled={!!acting}
-                            onClick={() => handleApproveParticipation(p._id)}
+                            onClick={() => { setTaskReviewDialog({ open: true, participation: p, reviewStatus: 'approved' }); setAdminRemarks(''); }}
                             sx={{ bgcolor: '#16a34a', '&:hover': { bgcolor: '#15803d' }, fontWeight: 800, borderRadius: 2 }}>
-                            {acting === `proof-${p._id}` ? 'Approving...' : 'Approve & Reward'}
+                            Approve
                           </Button>
                           <Button fullWidth variant="outlined" color="error"
                             disabled={!!acting}
-                            onClick={() => handleRejectParticipation(p._id)}
+                            onClick={() => { setTaskReviewDialog({ open: true, participation: p, reviewStatus: 'rejected' }); setAdminRemarks(''); }}
                             sx={{ fontWeight: 800, borderRadius: 2 }}>
                             Reject
                           </Button>
@@ -797,12 +811,42 @@ const ManagePrograms = () => {
           <Button onClick={() => setCancelDialog({ open: false, prog: null })} disabled={submitting} sx={{ fontWeight: 700 }}>
             Keep Program
           </Button>
-          <Button variant="contained" color="error" onClick={handleCancel} disabled={submitting}
-            sx={{ fontWeight: 800, borderRadius: 2 }}>
-            {submitting ? 'Cancelling…' : 'Confirm Cancel'}
+          <Button variant="contained" color="error" onClick={handleCancel} disabled={submitting} sx={{ fontWeight: 800 }}>
+            Cancel Program
           </Button>
         </DialogActions>
       </Dialog>
+
+      {/* ── Task Review dialog ── */}
+      <Dialog open={taskReviewDialog.open} onClose={() => !submitting && setTaskReviewDialog({ open: false, participation: null, reviewStatus: '' })}
+        maxWidth="sm" fullWidth PaperProps={{ sx: { borderRadius: 4 } }}>
+        <DialogTitle sx={{ fontWeight: 900, color: taskReviewDialog.reviewStatus === 'approved' ? '#16a34a' : '#ef4444' }}>
+          {taskReviewDialog.reviewStatus === 'approved' ? 'Approve Task Completion' : 'Reject Task Completion'}
+        </DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" color="text.secondary" mb={2}>
+            {taskReviewDialog.reviewStatus === 'approved' 
+              ? `You are about to approve this task completion. If the task is marked as "Completed", the resident will be rewarded with coins.`
+              : `You are about to reject this task completion.`}
+          </Typography>
+          <TextField 
+            fullWidth multiline rows={3} label="Admin Remarks (optional)" variant="filled"
+            value={adminRemarks} onChange={(e) => setAdminRemarks(e.target.value)}
+            placeholder="e.g. Great job! / Needs more proof..." 
+          />
+        </DialogContent>
+        <DialogActions sx={{ p: 3, gap: 1 }}>
+          <Button onClick={() => setTaskReviewDialog({ open: false, participation: null, reviewStatus: '' })} disabled={submitting} sx={{ fontWeight: 700 }}>
+            Cancel
+          </Button>
+          <Button variant="contained" 
+            color={taskReviewDialog.reviewStatus === 'approved' ? 'success' : 'error'} 
+            onClick={handleReviewParticipation} disabled={submitting} sx={{ fontWeight: 800 }}>
+            {submitting ? 'Saving...' : 'Confirm'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
 
       {/* ── Review volunteers dialog (single program) ── */}
       <Dialog open={reviewDialog.open} onClose={() => setReviewDialog({ open: false, prog: null })}

@@ -5,14 +5,14 @@ import api from '../../services/api';
 import { toast } from 'react-toastify';
 
 const RequestCollection = ({ onRequested }) => {
-  const [formData, setFormData] = useState({ wasteType: 'Mixed', weight: '', notes: '' });
+  const [formData, setFormData] = useState({ wasteType: 'Mixed', estimatedWeight: '', notes: '' });
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
       await api.post('/collections/request', formData);
       toast.success("Pickup Requested! A collector will be notified.");
-      setFormData({ wasteType: 'Mixed', weight: '', notes: '' });
+      setFormData({ wasteType: 'Mixed', estimatedWeight: '', notes: '' });
       if (onRequested) onRequested();
     } catch (err) {
       toast.error("Failed to submit request.");
@@ -41,8 +41,8 @@ const RequestCollection = ({ onRequested }) => {
             fullWidth
             type="number"
             label="Estimated Weight (kg)"
-            value={formData.weight}
-            onChange={(e) => setFormData({...formData, weight: e.target.value})}
+            value={formData.estimatedWeight}
+            onChange={(e) => setFormData({...formData, estimatedWeight: e.target.value})}
             required
           />
           <TextField

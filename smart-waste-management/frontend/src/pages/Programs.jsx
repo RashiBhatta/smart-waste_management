@@ -18,6 +18,7 @@ import {
   LocalShipping, Payment, History, AddCircle,
   Close, Info
 } from '@mui/icons-material';
+import { MenuItem } from '@mui/material';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import { useSocket } from '../context/SocketContext';
@@ -83,14 +84,14 @@ const ProgramCard = ({ program, onJoin, joining, onParticipate }) => {
       if (program.participationStatus === 'rejected') {
         return (
           <Button fullWidth variant="outlined" color="error" onClick={() => onParticipate(program._id)} sx={{ borderRadius: 2, fontWeight: 800 }}>
-            Proof Rejected - Resubmit
+            Task Completion Rejected - Resubmit
           </Button>
         );
       }
       if (appStatus === 'approved') {
         return (
           <Button fullWidth variant="contained" color="primary" onClick={() => onParticipate(program._id)} sx={{ borderRadius: 2, fontWeight: 800 }}>
-            Submit Proof
+            Submit Task Completion
           </Button>
         );
       }
@@ -298,7 +299,12 @@ const VolunteerPrograms = () => {
 
   const [participateOpen, setParticipateOpen] = useState(false);
   const [participateId, setParticipateId] = useState(null);
-  const [proofText, setProofText] = useState('');
+  const [taskForm, setTaskForm] = useState({
+    taskCompletedStatus: 'completed',
+    taskDescription: '',
+    completionDate: new Date().toISOString().split('T')[0],
+    proofImageUrl: ''
+  });
   const [submittingProof, setSubmittingProof] = useState(false);
 
   // Tab 0 = All programs, Tab 1 = My applications
@@ -369,20 +375,31 @@ const VolunteerPrograms = () => {
   // ── Participation handler ────────────────────────────────────
   const handleParticipateOpen = (programId) => {
     setParticipateId(programId);
-    setProofText('');
+    setTaskForm({
+      taskCompletedStatus: 'completed',
+      taskDescription: '',
+      completionDate: new Date().toISOString().split('T')[0],
+      proofImageUrl: ''
+    });
     setParticipateOpen(true);
   };
 
   const submitParticipation = async () => {
-    if (!proofText.trim()) return toast.error('Proof description is required');
+    if (!taskForm.taskCompletedStatus) return toast.error('Task status is required');
+    if (!taskForm.taskDescription.trim()) return toast.error('Task description is required');
+    if (!taskForm.completionDate) return toast.error('Completion date is required');
     try {
       setSubmittingProof(true);
-      await api.post(`/programs/${participateId}/participate`, { proof: proofText });
-      toast.success('Participation proof submitted for review!');
+      const payload = {
+        ...taskForm,
+        completionDate: taskForm.completionDate  // Send as string (YYYY-MM-DD format)
+      };
+      await api.post(`/programs/${participateId}/participate`, payload);
+      toast.success('Task completion form submitted for review!');
       setParticipateOpen(false);
       setPrograms((prev) => prev.map(p => p._id === participateId ? { ...p, participationStatus: 'pending' } : p));
     } catch (err) {
-      toast.error(err.response?.data?.message || 'Failed to submit proof');
+      toast.error(err.response?.data?.message || 'Failed to submit form');
     } finally {
       setSubmittingProof(false);
     }
@@ -564,28 +581,58 @@ const VolunteerPrograms = () => {
         </Container>
       </Box>
 
-      {/* ── Submit Proof Dialog ── */}
-      <Dialog open={participateOpen} onClose={() => setParticipateOpen(false)} maxWidth="xs" fullWidth>
-        <DialogTitle sx={{ fontWeight: 900 }}>Submit Participation Proof</DialogTitle>
+      {/* ── Submit Task Completion Dialog ── */}
+      <Dialog open={participateOpen} onClose={() => setParticipateOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle sx={{ fontWeight: 900 }}>Submit Task Completion Form</DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="text.secondary" mb={2}>
-            Please describe how you participated in this volunteer program to claim your 100 Eco-Coins.
+            Please fill out this form to confirm your participation. Admin approval is required for the 100 Eco-Coins reward.
           </Typography>
-          <TextField
-            autoFocus
-            fullWidth
-            multiline
-            rows={4}
-            variant="outlined"
-            placeholder="I collected 2 bags of waste at the zone..."
-            value={proofText}
-            onChange={(e) => setProofText(e.target.value)}
-          />
+          <Stack spacing={2} mt={1}>
+            <TextField
+              select
+              fullWidth
+              label="Task Completed Status *"
+              value={taskForm.taskCompletedStatus || ''}
+              onChange={(e) => setTaskForm({ ...taskForm, taskCompletedStatus: e.target.value })}
+            >
+              <MenuItem value="completed">Completed</MenuItem>
+              <MenuItem value="not_completed">Not Completed</MenuItem>
+            </TextField>
+            <TextField
+              fullWidth
+              label="Completion Date *"
+              type="date"
+              InputLabelProps={{ shrink: true }}
+              value={taskForm.completionDate || ''}
+              onChange={(e) => setTaskForm({ ...taskForm, completionDate: e.target.value })}
+              error={!taskForm.completionDate}
+              helperText={!taskForm.completionDate ? 'Date is required' : ''}
+            />
+            <TextField
+              fullWidth
+              multiline
+              rows={3}
+              label="Task Description *"
+              placeholder="I collected 2 bags of waste at the zone..."
+              value={taskForm.taskDescription}
+              onChange={(e) => setTaskForm({ ...taskForm, taskDescription: e.target.value })}
+              error={!taskForm.taskDescription.trim()}
+              helperText={!taskForm.taskDescription.trim() ? 'Description is required' : ''}
+            />
+            <TextField
+              fullWidth
+              label="Proof Image URL (Optional)"
+              placeholder="https://cloudinary.com/.../image.jpg"
+              value={taskForm.proofImageUrl}
+              onChange={(e) => setTaskForm({ ...taskForm, proofImageUrl: e.target.value })}
+            />
+          </Stack>
         </DialogContent>
         <DialogActions sx={{ p: 2, pt: 0 }}>
           <Button onClick={() => setParticipateOpen(false)} color="inherit">Cancel</Button>
-          <Button onClick={submitParticipation} variant="contained" disabled={submittingProof || !proofText.trim()}>
-            {submittingProof ? 'Submitting...' : 'Submit Proof'}
+          <Button onClick={submitParticipation} variant="contained" disabled={submittingProof || !taskForm.taskDescription.trim()}>
+            {submittingProof ? 'Submitting...' : 'Submit Form'}
           </Button>
         </DialogActions>
       </Dialog>

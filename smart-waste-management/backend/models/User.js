@@ -127,15 +127,22 @@ UserSchema.methods.addCoins = async function(amount, source) {
   this.totalCoinsEarned += amount;
   
   // Check if reached 1000 coins for free service
-  if (this.totalCoinsEarned >= 1000 && !this.isServiceFree) {
-    this.freeServiceMonths = 1;
-    this.freeServiceUntil = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+  if (this.coins >= 1000) {
+    this.freeServiceMonths += 1;
+    
+    // Set or extend freeServiceUntil
+    if (this.freeServiceUntil && this.freeServiceUntil > new Date()) {
+      this.freeServiceUntil = new Date(this.freeServiceUntil.getTime() + 30 * 24 * 60 * 60 * 1000);
+    } else {
+      this.freeServiceUntil = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+    }
+    
     this.isServiceFree = true;
     this.paymentStatus = 'free';
     this.monthlyFeePaid = true;
     
-    // Deduct coins for free service (optional - you can keep or deduct)
-    // this.coins -= 1000;
+    // Deduct 1000 coins for free service reward
+    this.coins -= 1000;
   }
   
   await this.save();

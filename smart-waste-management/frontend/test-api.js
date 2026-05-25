@@ -1,4 +1,4 @@
-import api from './services/api';
+import api from './src/services/api.js';
 
 const testAPI = async () => {
   try {
@@ -8,8 +8,9 @@ const testAPI = async () => {
     return true;
   } catch (error) {
     console.error('API connection failed:', error.message);
+    console.error('Full error:', error);
     return false;
   }
 };
 
-export default testAPI;
+testAPI();
